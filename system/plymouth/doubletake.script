@@ -1,0 +1,205 @@
+# DoubleTake boot screen: the DoubleTake icon, inside a ring that turns, orange on one side
+# and green on the other, while the tablet starts or shuts down; the name below it.
+# The password box (for an encrypted disk) borrows the lock, entry and bullet images
+# from the system's own spinner theme, copied in beside this file by setup.sh.
+
+# Where the firmware drew its own logo (the Dell logo on the 7220), in screen pixels, and
+# its size; all 0 when it says nothing (doubletake-helper splash tune).
+bgrt_x = 0; bgrt_y = 0; bgrt_w = 0; bgrt_h = 0;  # doubletake-helper splash tune
+handoff = 0;
+if (bgrt_w > 0 && bgrt_x + bgrt_w <= Window.GetWidth() && bgrt_y + bgrt_h <= Window.GetHeight()) {
+    handoff = 1;  # the same screen the firmware drew on: take over in its place
+}
+
+if (handoff) {
+    Window.SetBackgroundTopColor(0, 0, 0);  # the firmware's black, so nothing changes but the logo
+    Window.SetBackgroundBottomColor(0, 0, 0);
+} else {
+    Window.SetBackgroundTopColor(0.039, 0.055, 0.071);
+    Window.SetBackgroundBottomColor(0.039, 0.055, 0.071);
+}
+
+# An edition shows its own line under the name (doubletake tron on|off, by hand).
+edition = "";  # doubletake-helper splash tune
+ring.base = Image("ring.png");
+icon.image = Image("icon.png");
+title.image = Image("wordmark" + edition + ".png");
+
+# Laid out as drawn: the ring 366 high, the name 410 below its top. With the firmware's logo:
+# the ring the size of that logo, centred where it was. Without: all of it at most 45% of the
+# screen's height, centred, so a small screen still shows everything.
+scale = 1;
+if (handoff) {
+    side = bgrt_w;
+    if (bgrt_h > side) {
+        side = bgrt_h;
+    }
+    scale = side / 366;
+} else if (514 > Window.GetHeight() * 0.45) {
+    scale = Window.GetHeight() * 0.45 / 514;
+}
+ring.size = Math.Int(366 * scale);
+ring.base = ring.base.Scale(ring.size, ring.size);
+icon.size = Math.Int(240 * scale);
+icon.image = icon.image.Scale(icon.size, icon.size);
+title.w = Math.Int(title.image.GetWidth() * scale);
+title.h = Math.Int(title.image.GetHeight() * scale);
+title.image = title.image.Scale(title.w, title.h);
+
+logo.w = ring.size;
+logo.h = Math.Int(514 * scale);
+if (handoff) {
+    logo.x = Window.GetX() + bgrt_x + bgrt_w / 2 - logo.w / 2;
+    logo.y = Window.GetY() + bgrt_y + bgrt_h / 2 - ring.size / 2;
+} else {
+    logo.x = Window.GetX() + Window.GetWidth() / 2 - logo.w / 2;
+    logo.y = Window.GetY() + Window.GetHeight() * 0.45 - logo.h / 2;
+}
+
+ring.sprite = Sprite(ring.base);
+ring.sprite.SetPosition(logo.x, logo.y, 1);
+icon.sprite = Sprite(icon.image);
+icon.sprite.SetPosition(logo.x + (ring.size - icon.size) / 2, logo.y + (ring.size - icon.size) / 2, 2);
+title.sprite = Sprite(title.image);
+title.sprite.SetPosition(logo.x + logo.w / 2 - title.w / 2, logo.y + Math.Int(410 * scale), 2);
+
+# The firmware's own logo, exactly where it was, to fade from.
+if (handoff) {
+    firmware.image = Image("firmware.png");
+    firmware.sprite = Sprite(firmware.image);
+    firmware.sprite.SetPosition(Window.GetX() + bgrt_x, Window.GetY() + bgrt_y, 3);
+}
+
+# The screen refreshes 50 times a second; the ring turns once every two seconds.
+# Starting: everything fades in over half a second (from the firmware's logo, which fades
+# out over the same half second after a moment, when there is one). Restarting or shutting down: shown at
+# once, then faded out over the time the last shutdown took, measured by DoubleTake (the
+# line below is set by doubletake-helper), so it is gone as the screen goes off.
+shutdown_fade = 50;  # ticks; doubletake-helper splash tune
+mode = Plymouth.GetMode();
+going_down = (mode == "shutdown" || mode == "reboot");
+ticks = 0;
+turn = 0;
+
+fun set_opacity (opacity) {
+    ring.sprite.SetOpacity(opacity);
+    icon.sprite.SetOpacity(opacity);
+    title.sprite.SetOpacity(opacity);
+}
+if (going_down) {
+    set_opacity(1);
+    if (handoff) {
+        firmware.sprite.SetOpacity(0);  # shutting down: DoubleTake's own, no hand-off
+    }
+} else {
+    set_opacity(0);
+}
+
+fun refresh_callback () {
+    global.ticks = ticks + 1;
+    global.turn = turn + 3.14159265 / 50;
+    if (turn > 6.2831853) {
+        global.turn = turn - 6.2831853;
+    }
+    ring.sprite.SetImage(ring.base.Rotate(turn));
+    if (going_down) {
+        opacity = 1;
+        if (ticks > 15) {
+            opacity = 1 - (ticks - 15) / shutdown_fade;
+        }
+    } else {
+        opacity = ticks / 25;
+        if (handoff) {
+            opacity = (ticks - 10) / 25;  # a moment of the firmware's logo, then the change
+            firmware_opacity = 1 - opacity;
+            if (firmware_opacity < 0) {
+                firmware_opacity = 0;
+            }
+            if (firmware_opacity > 1) {
+                firmware_opacity = 1;
+            }
+            firmware.sprite.SetOpacity(firmware_opacity);
+        }
+    }
+    if (opacity > 1) {
+        opacity = 1;
+    }
+    if (opacity < 0) {
+        opacity = 0;
+    }
+    set_opacity(opacity);
+}
+Plymouth.SetRefreshFunction(refresh_callback);
+
+# ----- the password box, for an encrypted disk ---------------------------------------
+
+fun dialog_setup () {
+    local.box;
+    local.lock;
+    local.entry;
+    box.image = Image("box.png");
+    lock.image = Image("lock.png");
+    entry.image = Image("entry.png");
+    box.sprite = Sprite(box.image);
+    box.x = Window.GetX() + Window.GetWidth() / 2 - box.image.GetWidth() / 2;
+    box.y = logo.y + logo.h + 30;
+    box.z = 10000;
+    box.sprite.SetPosition(box.x, box.y, box.z);
+    lock.sprite = Sprite(lock.image);
+    lock.x = box.x + box.image.GetWidth() / 2 - (lock.image.GetWidth() + entry.image.GetWidth()) / 2;
+    lock.y = box.y + box.image.GetHeight() / 2 - lock.image.GetHeight() / 2;
+    lock.z = box.z + 1;
+    lock.sprite.SetPosition(lock.x, lock.y, lock.z);
+    entry.sprite = Sprite(entry.image);
+    entry.x = lock.x + lock.image.GetWidth();
+    entry.y = box.y + box.image.GetHeight() / 2 - entry.image.GetHeight() / 2;
+    entry.z = box.z + 1;
+    entry.sprite.SetPosition(entry.x, entry.y, entry.z);
+    global.dialog.box = box;
+    global.dialog.lock = lock;
+    global.dialog.entry = entry;
+    global.dialog.bullet_image = Image("bullet.png");
+    dialog_opacity(1);
+}
+
+fun dialog_opacity (opacity) {
+    dialog.box.sprite.SetOpacity(opacity);
+    dialog.lock.sprite.SetOpacity(opacity);
+    dialog.entry.sprite.SetOpacity(opacity);
+    for (index = 0; dialog.bullet[index]; index++) {
+        dialog.bullet[index].sprite.SetOpacity(opacity);
+    }
+}
+
+fun display_normal_callback () {
+    global.status = "normal";
+    if (global.dialog) {
+        dialog_opacity(0);
+    }
+}
+
+fun display_password_callback (prompt, bullets) {
+    global.status = "password";
+    if (!global.dialog) {
+        dialog_setup();
+    } else {
+        dialog_opacity(1);
+    }
+    for (index = 0; dialog.bullet[index] || index < bullets; index++) {
+        if (!dialog.bullet[index]) {
+            dialog.bullet[index].sprite = Sprite(dialog.bullet_image);
+            dialog.bullet[index].x = dialog.entry.x + 12 + index * dialog.bullet_image.GetWidth();
+            dialog.bullet[index].y = dialog.entry.y + dialog.entry.image.GetHeight() / 2 - dialog.bullet_image.GetHeight() / 2;
+            dialog.bullet[index].z = dialog.entry.z + 1;
+            dialog.bullet[index].sprite.SetPosition(dialog.bullet[index].x, dialog.bullet[index].y, dialog.bullet[index].z);
+        }
+        if (index < bullets) {
+            dialog.bullet[index].sprite.SetOpacity(1);
+        } else {
+            dialog.bullet[index].sprite.SetOpacity(0);
+        }
+    }
+}
+
+Plymouth.SetDisplayNormalFunction(display_normal_callback);
+Plymouth.SetDisplayPasswordFunction(display_password_callback);

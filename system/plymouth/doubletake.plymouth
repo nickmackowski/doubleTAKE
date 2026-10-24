@@ -1,0 +1,8 @@
+[Plymouth Theme]
+Name=DoubleTake
+Description=The DoubleTake icon in a turning orange and green ring while the tablet starts and shuts down
+ModuleName=script
+
+[script]
+ImageDir=/usr/share/plymouth/themes/doubletake
+ScriptFile=/usr/share/plymouth/themes/doubletake/doubletake.script

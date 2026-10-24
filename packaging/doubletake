@@ -1,0 +1,13 @@
+#!/bin/bash
+# DoubleTake, installed from the package. The program is in /usr/share/doubletake and the
+# libraries it brings for this system's Python in /usr/lib/doubletake/<python version>.
+APP=/usr/share/doubletake
+TAG="$(/usr/bin/python3 -c 'import sys; print("cp%d%d" % sys.version_info[:2])')"
+LIBS=/usr/lib/doubletake/$TAG
+if [[ ! -d "$LIBS" ]]; then
+    echo "This DoubleTake package has no camera library for Python ${TAG#cp3}. Install the package" >&2
+    echo "made for this system (el9 for Red Hat, Rocky and Alma 9; fc for Fedora), or use setup.sh." >&2
+    LIBS=""
+fi
+export PYTHONPATH="$APP${LIBS:+:$LIBS}"
+exec /usr/bin/python3 -s "$APP/run.py" "$@"

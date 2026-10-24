@@ -1,0 +1,1112 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
+<title>DoubleTake Field Station</title>
+<link rel="stylesheet" href="app.css">
+<script>
+  // Draw in the last look straight away, before the engine first answers.
+  try {
+    document.documentElement.dataset.look = localStorage.getItem("fs-look") || "classic";
+    document.documentElement.dataset.theme = localStorage.getItem("fs-theme") || "daylight";
+  } catch (err) { /* private window: the engine's answer sets it a moment later */ }
+</script>
+</head>
+<body>
+
+<header class="bar">
+  <button id="back" class="back" type="button" aria-label="Back" hidden>
+    <svg viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7"/></svg>
+  </button>
+  <svg id="bar-icon" class="bar-icon" viewBox="0 0 24 24"><path d="M3 8h4l2-3h6l2 3h4v11H3z"/><circle cx="12" cy="13" r="3.5"/></svg>
+  <div id="bar-title" class="title">DoubleTake &#8226; Field Station</div>
+  <div id="bar-chip" class="chip" hidden></div>
+  <div id="bar-folder" class="mono bar-folder" hidden></div>
+  <div id="bar-count" class="title" hidden></div>
+  <div class="grow"></div>
+  <div id="bar-wired" class="bar-stat" hidden>
+    <svg id="bar-wired-icon" viewBox="0 0 24 24"><rect x="9" y="3" width="6" height="5" rx="1"/><rect x="2" y="16" width="6" height="5" rx="1"/><rect x="16" y="16" width="6" height="5" rx="1"/><path d="M12 8v4M5 16v-4h14v4"/></svg>
+    <span id="bar-wired-text">Wired</span>
+  </div>
+  <div id="bar-wifi" class="bar-stat" hidden>
+    <svg id="bar-wifi-icon" viewBox="0 0 24 24"></svg>
+    <span id="bar-wifi-text"></span>
+  </div>
+  <button id="bar-camera" class="bar-stat bar-batts" type="button" hidden>
+    <svg viewBox="0 0 24 24"><path d="M3 8h4l2-3h6l2 3h4v11H3z"/><circle cx="12" cy="13" r="3.5"/></svg>
+    <span id="bar-camera-batts" class="batts"></span>
+  </button>
+  <button id="bar-packs" class="bar-stat bar-batts" type="button" hidden>
+    <svg viewBox="0 0 24 24"><rect x="6" y="3" width="12" height="18" rx="2"/><path d="M11 18h2"/></svg>
+    <span id="bar-tablet-batts" class="batts"></span>
+  </button>
+  <div id="bar-clock" class="bar-stat tab"></div>
+</header>
+
+<!-- ===================================================================== HOME -->
+<section id="view-home" class="view">
+  <div class="home-grid">
+
+    <div id="cam" class="card tile cam span2">
+      <div id="cam-absent" class="cam-state" hidden>
+        <div class="cam-head">
+          <svg class="ico-xl" viewBox="0 0 24 24"><path d="M3 8h4l2-3h6l2 3h4v11H3z"/><circle cx="12" cy="13" r="3.5"/></svg>
+          <div>
+            <div class="h1">Connect the camera</div>
+            <div class="lead">Plug the camera into the tablet with its USB cable and switch it on. It is found by itself.</div>
+          </div>
+        </div>
+        <div class="cam-foot"><div class="grow"></div><button id="btn-scan" class="btn" type="button">Check now</button></div>
+      </div>
+
+      <div id="cam-scanning" class="cam-state" hidden>
+        <div class="cam-head">
+          <svg class="ico-xl spin" viewBox="0 0 24 24"><path d="M21 12a9 9 0 1 1-3-6.7"/><path d="M21 4v5h-5"/></svg>
+          <div>
+            <div class="h1">Reading the camera</div>
+            <div id="cam-scanning-text" class="lead"></div>
+          </div>
+        </div>
+        <div class="cam-foot"><div class="note">The first read after plugging in can take about a minute.</div></div>
+      </div>
+
+      <button id="cam-ready" class="cam-state cam-go" type="button" hidden>
+        <div class="cam-head">
+          <svg class="ico-xl" viewBox="0 0 24 24"><path d="M12 3v12M7 10l5 5 5-5M4 20h16"/></svg>
+          <div>
+            <div class="h1">Back up camera</div>
+            <div id="cam-ready-sub" class="lead"></div>
+          </div>
+        </div>
+        <div class="cam-foot">
+          <div class="stat"><div id="cam-new" class="num"></div><div class="unit">new photos</div></div>
+          <div class="stat"><div id="cam-bytes" class="num"></div><div class="unit">to copy</div></div>
+          <div class="stat" id="cam-batt-box"><div id="cam-batt" class="num"></div><div class="unit">camera battery</div></div>
+          <div class="grow"></div>
+          <div class="go">Start <svg viewBox="0 0 24 24"><path d="M9 5l7 7-7 7"/></svg></div>
+        </div>
+      </button>
+
+      <div id="cam-none" class="cam-state" hidden>
+        <div class="cam-head">
+          <svg class="ico-xl" viewBox="0 0 24 24"><path d="M5 12l5 5 9-10"/></svg>
+          <div>
+            <div class="h1">Nothing new to copy</div>
+            <div id="cam-none-text" class="lead"></div>
+          </div>
+        </div>
+        <div class="cam-foot"><div class="grow"></div><button id="btn-rescan" class="btn" type="button">Read again</button></div>
+      </div>
+
+      <div id="cam-error" class="cam-state" hidden>
+        <div class="cam-head">
+          <svg class="ico-xl" viewBox="0 0 24 24"><path d="M12 3l10 18H2z"/><path d="M12 10v5M12 18h.01"/></svg>
+          <div>
+            <div class="h1">Camera problem</div>
+            <div id="cam-error-text" class="lead"></div>
+          </div>
+        </div>
+        <div class="cam-foot"><div class="grow"></div><button id="btn-retry" class="btn" type="button">Try again</button></div>
+      </div>
+    </div>
+
+    <div id="fmt" class="card tile fmt">
+      <div class="label" id="fmt-label">Camera cards</div>
+      <div id="fmt-title" class="h2"></div>
+      <div id="fmt-text" class="body"></div>
+      <div id="fmt-counts" class="counts" hidden>
+        <div><b id="fmt-photos"></b><span>on camera</span></div>
+        <div><b id="fmt-tablet"></b><span>on Copy 1</span></div>
+        <div><b id="fmt-second"></b><span>on Copy 2</span></div>
+      </div>
+    </div>
+
+    <div id="sec" class="card tile">
+      <div class="label">Second copy</div>
+      <div id="sec-title" class="h2"></div>
+      <div id="sec-text" class="body"></div>
+      <div id="sec-bar" class="meter" hidden><div id="sec-fill"></div></div>
+      <div class="grow"></div>
+      <div class="tile-foot">
+        <div id="sec-card" class="small muted"></div>
+        <div class="grow"></div>
+        <button id="btn-sec" class="btn small-btn" type="button" hidden></button>
+      </div>
+    </div>
+
+    <div id="lib" class="card tile tile-link" role="button" tabindex="0">
+      <div class="tile-top"><div class="label">Shoot library</div><div class="grow"></div><div class="label">All shoots ›</div></div>
+      <div id="lib-title" class="h2"></div>
+      <div id="lib-list" class="shoots"></div>
+    </div>
+
+    <div id="nas-tile" class="card tile">
+      <div class="label">NAS</div>
+      <div id="nas-title" class="h2"></div>
+      <div id="nas-text" class="body"></div>
+      <div id="nas-who" class="shoots"></div>
+      <div class="grow"></div>
+      <div class="tile-foot">
+        <div id="nas-foot" class="small muted mono"></div>
+        <div class="grow"></div>
+        <button id="nas-fix" class="btn" type="button" hidden></button>
+      </div>
+    </div>
+  </div>
+
+  <div class="foot">
+    <div class="card foot-box">
+      <div class="foot-copy">
+        <svg class="ico-m" viewBox="0 0 24 24"><rect x="4" y="3" width="16" height="18" rx="2"/><circle cx="12" cy="10.5" r="4"/><circle cx="12" cy="10.5" r=".6"/><path d="M14.5 13l2.5 4M7 18h.01"/></svg>
+        <div><div class="label">Copy 1</div><div id="foot-tablet" class="foot-val"></div></div>
+      </div>
+      <div id="foot-copy2" class="foot-copy">
+        <svg class="ico-m copy2-sd" viewBox="0 0 24 24"><path d="M8 3h9a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V7zM9 3v4M12 3v4M15 3v4"/></svg>
+        <svg class="ico-m copy2-usb" viewBox="0 0 24 24" hidden><path d="M8 9h8v12H8zM9.5 3h5v6h-5zM11 5h.01M13 5h.01"/></svg><svg class="ico-m copy2-drive" viewBox="0 0 24 24" hidden><rect x="3" y="4" width="14" height="16" rx="2"/><circle cx="10" cy="11" r="3.5"/><circle cx="10" cy="11" r=".5"/><path d="M17 12h2.5a1.5 1.5 0 0 1 1.5 1.5V19M19.5 19h3"/></svg>
+        <div><div class="label">Copy 2</div><div id="foot-card" class="foot-val"></div></div>
+      </div>
+      <div class="grow"></div>
+      <div id="foot-problem" class="small muted"></div>
+      <div class="foot-version"><div class="label">Version</div><div id="foot-version" class="foot-val"></div></div>
+    </div>
+    <button id="btn-settings" class="btn foot-btn" type="button">
+      <svg class="ico-s" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9l2.1 2.1M17 17l2.1 2.1M19.1 4.9L17 7M7 17l-2.1 2.1"/></svg>Settings
+    </button>
+  </div>
+</section>
+
+<!-- ==================================================================== READY -->
+<section id="view-ready" class="view">
+  <div class="two-col">
+    <div class="col">
+      <div class="card pad cam-card">
+        <svg class="ico-l" viewBox="0 0 24 24"><path d="M3 8h4l2-3h6l2 3h4v11H3z"/><circle cx="12" cy="13" r="3.5"/></svg>
+        <div class="grow">
+          <div id="rdy-model" class="h2"></div>
+          <div id="rdy-serial" class="body"></div>
+        </div>
+        <div class="right">
+          <div class="label">Camera battery</div>
+          <div id="rdy-batt" class="num-m"></div>
+        </div>
+      </div>
+      <div class="card pad grow col-flex">
+        <div class="label">On the camera</div>
+        <div class="quad">
+          <div><div id="rdy-photos" class="num-l"></div><div class="unit">photos on the cards</div></div>
+          <div><div id="rdy-already" class="num-l"></div><div class="unit">already on the tablet</div></div>
+          <div><div id="rdy-new" class="num-l accent"></div><div class="unit">new, to copy now</div></div>
+          <div><div id="rdy-bytes" class="num-l accent"></div><div class="unit">to copy</div></div>
+        </div>
+        <div id="rdy-dupes" class="body"></div>
+        <div id="rdy-skipped" class="body"></div>
+        <div id="rdy-limit" class="body warn" hidden></div>
+        <div class="grow"></div>
+        <div id="rdy-power" class="warn-card power-note note" hidden><span class="t" id="rdy-power-text"></span></div>
+        <div id="rdy-storage" class="small muted"></div>
+      </div>
+    </div>
+
+    <div class="col">
+      <div class="card pad">
+        <div class="label">Shoot name</div>
+        <input id="rdy-name" class="name" type="text" maxlength="60" autocomplete="off" autocapitalize="off"
+               spellcheck="false" readonly inputmode="none" placeholder="Tap to type a name, or leave blank">
+        <div id="rdy-chips" class="chips"></div>
+        <div class="folder-line"><span class="label">Folder</span><span id="rdy-folder" class="mono"></span></div>
+      </div>
+      <div class="card pad grow col-flex">
+        <div class="label">Copying to</div>
+        <div class="dest">
+          <svg class="ico-m" viewBox="0 0 24 24"><rect x="4" y="3" width="16" height="18" rx="2"/><circle cx="12" cy="10.5" r="4"/><circle cx="12" cy="10.5" r=".6"/><path d="M14.5 13l2.5 4M7 18h.01"/></svg>
+          <div class="grow"><div class="dest-name">Copy 1</div><div id="rdy-tablet" class="body"></div></div>
+          <div class="badge ink">First</div>
+        </div>
+        <div class="rule"></div>
+        <div id="rdy-card-row" class="dest">
+          <svg class="ico-m copy2-sd" viewBox="0 0 24 24"><path d="M8 3h9a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V7zM9 3v4M12 3v4M15 3v4"/></svg><svg class="ico-m copy2-usb" viewBox="0 0 24 24" hidden><path d="M8 9h8v12H8zM9.5 3h5v6h-5zM11 5h.01M13 5h.01"/></svg><svg class="ico-m copy2-drive" viewBox="0 0 24 24" hidden><rect x="3" y="4" width="14" height="16" rx="2"/><circle cx="10" cy="11" r="3.5"/><circle cx="10" cy="11" r=".5"/><path d="M17 12h2.5a1.5 1.5 0 0 1 1.5 1.5V19M19.5 19h3"/></svg>
+          <div class="grow"><div id="rdy-card-name" class="dest-name"></div><div id="rdy-card-text" class="body"></div></div>
+          <div id="rdy-card-badge" class="badge"></div>
+        </div>
+      </div>
+      <button id="btn-start" class="start" type="button">
+        <svg viewBox="0 0 24 24"><path d="M12 3v12M7 10l5 5 5-5M4 20h16"/></svg>
+        <span id="btn-start-text">Start backup</span>
+      </button>
+    </div>
+  </div>
+</section>
+
+<!-- ===================================================================== COPY -->
+<section id="view-copy" class="view">
+  <div class="two-col wide-left">
+    <div class="col">
+      <div class="card pad cam-card">
+        <svg class="ico-l" viewBox="0 0 24 24"><path d="M3 8h4l2-3h6l2 3h4v11H3z"/><circle cx="12" cy="13" r="3.5"/></svg>
+        <div class="grow">
+          <div id="cp-model" class="h2"></div>
+          <div id="cp-sub" class="body"></div>
+        </div>
+        <div class="right">
+          <div class="label">Camera battery</div>
+          <div id="cp-batt" class="num-m"></div>
+        </div>
+      </div>
+
+      <div class="card pad grow col-flex cp-main">
+        <div class="ring" aria-hidden="true">
+          <svg viewBox="0 0 100 100"><circle class="ring-bg" cx="50" cy="50" r="44"/><circle id="cp-ring" class="ring-fg" cx="50" cy="50" r="44" transform="rotate(-90 50 50)"/></svg>
+          <div class="ring-text"><div id="cp-ring-pct" class="ring-pct"></div><div class="label">Copied</div></div>
+        </div>
+        <div class="quad two">
+          <div><div class="label">Files copied</div><div class="num-xl"><span id="cp-files"></span><span id="cp-files-of" class="of"></span></div></div>
+          <div><div class="label">Data copied</div><div class="num-xl"><span id="cp-data"></span><span id="cp-data-of" class="of"></span></div></div>
+          <div><div class="label">Elapsed</div><div id="cp-elapsed" class="num-xl"></div></div>
+          <div><div class="label">Remaining, about</div><div id="cp-left" class="num-xl"></div></div>
+        </div>
+        <div class="grow"></div>
+        <div id="cp-file" class="mono small"></div>
+        <div class="meter tall"><div id="cp-fill"></div></div>
+        <div class="under"><div id="cp-pct"></div><div id="cp-speed"></div></div>
+      </div>
+
+      <div class="card pad verify">
+        <svg class="ico-l green" viewBox="0 0 24 24"><path d="M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6z"/><path d="M8.5 12l2.5 2.5 4.5-5"/></svg>
+        <div class="grow">
+          <div class="h3">File verification</div>
+          <div class="body">Checksum, size and file type, as each file lands.</div>
+        </div>
+        <div class="vstat green"><b id="cp-verified"></b><span>verified</span></div>
+        <div class="vstat"><b id="cp-failed"></b><span>failed</span></div>
+      </div>
+    </div>
+
+    <div class="col">
+      <div class="card pad">
+        <div class="label">Shoot folder</div>
+        <div id="cp-folder" class="mono folder-big"></div>
+      </div>
+      <div class="card pad grow col-flex">
+        <div class="label">Copying to</div>
+        <div class="dest">
+          <svg class="ico-m" viewBox="0 0 24 24"><rect x="4" y="3" width="16" height="18" rx="2"/><circle cx="12" cy="10.5" r="4"/><circle cx="12" cy="10.5" r=".6"/><path d="M14.5 13l2.5 4M7 18h.01"/></svg>
+          <div class="grow"><div class="dest-name">Copy 1</div><div id="cp-tablet" class="body"></div></div>
+          <div id="cp-tablet-badge" class="badge orange">Writing</div>
+        </div>
+        <div class="rule"></div>
+        <div class="dest">
+          <svg class="ico-m copy2-sd" viewBox="0 0 24 24"><path d="M8 3h9a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V7zM9 3v4M12 3v4M15 3v4"/></svg><svg class="ico-m copy2-usb" viewBox="0 0 24 24" hidden><path d="M8 9h8v12H8zM9.5 3h5v6h-5zM11 5h.01M13 5h.01"/></svg><svg class="ico-m copy2-drive" viewBox="0 0 24 24" hidden><rect x="3" y="4" width="14" height="16" rx="2"/><circle cx="10" cy="11" r="3.5"/><circle cx="10" cy="11" r=".5"/><path d="M17 12h2.5a1.5 1.5 0 0 1 1.5 1.5V19M19.5 19h3"/></svg>
+          <div class="grow"><div id="cp-card-name" class="dest-name"></div><div id="cp-card-text" class="body"></div></div>
+          <div id="cp-card-badge" class="badge"></div>
+        </div>
+      </div>
+      <button id="btn-stop" class="card stop" type="button">
+        <svg viewBox="0 0 24 24"><rect x="5" y="5" width="14" height="14" fill="currentColor" stroke="none"/></svg>
+        <div><div class="h2">Stop backup</div><div class="body">Continues where it left off</div></div>
+      </button>
+    </div>
+  </div>
+</section>
+
+<!-- ===================================================================== DONE -->
+<section id="view-done" class="view">
+  <div class="done">
+    <div id="dn-banner" class="banner">
+      <div class="disc">
+        <svg id="dn-icon-ok" viewBox="0 0 24 24"><path d="M5 12l5 5 9-10"/></svg>
+        <svg id="dn-icon-warn" viewBox="0 0 24 24" hidden><path d="M12 5v9M12 18h.01"/></svg>
+      </div>
+      <div class="grow">
+        <div id="dn-title" class="h0"></div>
+        <div id="dn-sub" class="banner-sub"></div>
+      </div>
+      <div id="dn-side" class="banner-side"></div>
+    </div>
+
+    <div class="four">
+      <div class="card pad"><div class="label">Files copied</div><div class="num-l"><span id="dn-files"></span><span id="dn-files-of" class="of"></span></div></div>
+      <div class="card pad"><div class="label">Data copied</div><div id="dn-data" class="num-l"></div></div>
+      <div class="card pad"><div class="label">Time</div><div id="dn-time" class="num-l"></div></div>
+      <div class="card pad"><div class="label">Failed</div><div id="dn-failed" class="num-l"></div></div>
+    </div>
+
+    <div class="card pad grow col-flex">
+      <div class="label">Where your photos are</div>
+      <div class="dest">
+        <svg class="ico-m" viewBox="0 0 24 24"><rect x="4" y="3" width="16" height="18" rx="2"/><circle cx="12" cy="10.5" r="4"/><circle cx="12" cy="10.5" r=".6"/><path d="M14.5 13l2.5 4M7 18h.01"/></svg>
+        <div class="dest-name w14">Copy 1</div>
+        <div id="dn-tablet" class="body grow"></div>
+        <div id="dn-tablet-state" class="state green"></div>
+      </div>
+      <div class="rule"></div>
+      <div class="dest">
+        <svg class="ico-m copy2-sd" viewBox="0 0 24 24"><path d="M8 3h9a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V7zM9 3v4M12 3v4M15 3v4"/></svg><svg class="ico-m copy2-usb" viewBox="0 0 24 24" hidden><path d="M8 9h8v12H8zM9.5 3h5v6h-5zM11 5h.01M13 5h.01"/></svg><svg class="ico-m copy2-drive" viewBox="0 0 24 24" hidden><rect x="3" y="4" width="14" height="16" rx="2"/><circle cx="10" cy="11" r="3.5"/><circle cx="10" cy="11" r=".5"/><path d="M17 12h2.5a1.5 1.5 0 0 1 1.5 1.5V19M19.5 19h3"/></svg>
+        <div id="dn-card-name" class="dest-name w14"></div>
+        <div class="grow">
+          <div id="dn-card-text" class="body"></div>
+          <div id="dn-card-bar" class="meter thin" hidden><div id="dn-card-fill"></div></div>
+        </div>
+        <div id="dn-card-state" class="state"></div>
+      </div>
+      <div class="rule"></div>
+      <div id="dn-format" class="dest fmt-row">
+        <svg class="ico-m" viewBox="0 0 24 24"><path d="M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6z"/></svg>
+        <div class="dest-name w14">Camera cards</div>
+        <div id="dn-format-text" class="body grow"></div>
+        <div id="dn-format-state" class="badge"></div>
+      </div>
+    </div>
+
+    <div class="actions">
+      <div id="dn-fail-list" class="small muted grow"></div>
+      <div id="done-power" class="note warn" hidden></div>
+      <button id="btn-again" class="btn big-btn" type="button" hidden>Continue backup</button>
+      <button id="btn-done" class="btn big-btn solid" type="button">Done</button>
+    </div>
+  </div>
+</section>
+
+
+<!-- ================================================================== LIBRARY -->
+<section id="view-library" class="view">
+  <div class="lib-head lib-cols">
+    <div class="label">Shoot</div>
+    <div class="label lib-copy"><svg class="ico-s" viewBox="0 0 24 24"><rect x="4" y="3" width="16" height="18" rx="2"/><circle cx="12" cy="10.5" r="4"/><circle cx="12" cy="10.5" r=".6"/><path d="M14.5 13l2.5 4M7 18h.01"/></svg>Copy 1</div>
+    <div class="label lib-copy"><svg class="ico-s copy2-sd" viewBox="0 0 24 24"><path d="M8 3h9a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V7zM9 3v4M12 3v4M15 3v4"/></svg><svg class="ico-s copy2-usb" viewBox="0 0 24 24" hidden><path d="M8 9h8v12H8zM9.5 3h5v6h-5zM11 5h.01M13 5h.01"/></svg><svg class="ico-s copy2-drive" viewBox="0 0 24 24" hidden><rect x="3" y="4" width="14" height="16" rx="2"/><circle cx="10" cy="11" r="3.5"/><circle cx="10" cy="11" r=".5"/><path d="M17 12h2.5a1.5 1.5 0 0 1 1.5 1.5V19M19.5 19h3"/></svg>Copy 2</div>
+    <div class="label">Delete</div>
+  </div>
+  <div id="lib-rows" class="lib-rows scroll"></div>
+  <div class="lib-foot">
+    <div id="lib-summary" class="lead-s grow"></div>
+    <button id="btn-exports" class="btn big-btn" type="button">Exports</button>
+    <button id="btn-delete" class="btn big-btn danger" type="button" disabled>Delete</button>
+  </div>
+</section>
+
+<!-- ===================================================================== GRID -->
+<section id="view-grid" class="view">
+  <div class="grid-bar">
+    <div class="label">Sort</div>
+    <div id="sort-by" class="seg small">
+      <button type="button" data-by="taken">Capture time</button>
+      <button type="button" data-by="name">Name</button>
+    </div>
+    <button id="sort-dir" class="btn" type="button"></button>
+    <div class="grow"></div>
+    <button id="grid-rename" class="btn" type="button">Rename</button>
+    <button id="grid-exports" class="btn" type="button" hidden>Exports</button>
+  </div>
+  <div id="grid-wrap" class="grid-wrap scroll">
+    <div id="grid-note" class="empty" hidden></div>
+    <div id="grid" class="thumbs"></div>
+  </div>
+</section>
+
+<!-- =================================================================== VIEWER -->
+<section id="view-viewer" class="view">
+  <div class="viewer">
+    <div class="stage-col">
+      <div id="stage" class="stage">
+        <img id="vw-fit" class="fit" alt="" draggable="false">
+        <img id="vw-full" class="full" alt="" draggable="false" hidden>
+        <div id="vw-note" class="note-c" hidden></div>
+        <div id="vw-name" class="tag fname"></div>
+        <div id="vw-mode" class="tag mode" hidden>100%</div>
+        <div id="vw-exif" class="tag exif" hidden></div>
+      </div>
+      <div class="tools">
+        <button id="vw-prev" class="btn sq" type="button" aria-label="Previous"><svg viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7"/></svg></button>
+        <button id="vw-next" class="btn sq" type="button" aria-label="Next"><svg viewBox="0 0 24 24"><path d="M9 5l7 7-7 7"/></svg></button>
+        <div class="seg">
+          <button id="vw-fitbtn" type="button" class="on">Fit</button>
+          <button id="vw-50" type="button" data-zoom="50">50%</button>
+          <button id="vw-75" type="button" data-zoom="75">75%</button>
+          <button id="vw-100" type="button" data-zoom="100">100%</button>
+        </div>
+        <div class="grow"></div>
+        <div class="taken"><div class="label">Taken</div><div id="vw-taken" class="v"></div></div>
+        <button id="vw-edit" class="btn" type="button">
+          <svg class="ico-s" viewBox="0 0 24 24"><path d="M4 20h4L19 9l-4-4L4 16z"/><path d="M13 7l4 4"/></svg>Edit
+        </button>
+        <button id="vw-all" class="btn" type="button">
+          <svg class="ico-s" viewBox="0 0 24 24"><rect x="4" y="4" width="7" height="7"/><rect x="13" y="4" width="7" height="7"/><rect x="4" y="13" width="7" height="7"/><rect x="13" y="13" width="7" height="7"/></svg>All
+        </button>
+      </div>
+    </div>
+    <div class="strip">
+      <div id="vw-frames" class="label"></div>
+      <div id="vw-strip" class="thumbs"></div>
+    </div>
+  </div>
+</section>
+
+<!-- =================================================================== EDITOR -->
+<section id="view-editor" class="view">
+  <div class="editor">
+    <div class="stage-col">
+      <div id="ed-stage" class="stage ed-stage">
+        <div id="ed-frame" class="ed-frame">
+          <img id="ed-img" alt="" draggable="false">
+          <div id="ed-crop" class="ed-crop" hidden>
+            <div class="ed-grid"></div>
+            <div class="ed-h tl" data-h="tl"></div><div class="ed-h tr" data-h="tr"></div>
+            <div class="ed-h bl" data-h="bl"></div><div class="ed-h br" data-h="br"></div>
+          </div>
+        </div>
+        <div id="ed-tag" class="tag mode" hidden></div>
+      </div>
+      <div class="tools">
+        <button id="ed-before" class="btn" type="button">Hold for original</button>
+        <button id="ed-reset" class="btn" type="button">Reset</button>
+        <div class="grow"></div>
+        <div id="ed-saved" class="small muted"></div>
+        <button id="ed-export" class="btn primary" type="button">Export JPEG</button>
+      </div>
+    </div>
+    <div class="ed-panel scroll">
+      <div class="ed-group">
+        <div class="label">Crop</div>
+        <div id="ed-aspect" class="seg small ed-aspect">
+          <button type="button" data-aspect="free">Free</button>
+          <button type="button" data-aspect="original">Original</button>
+          <button type="button" data-aspect="3:2">3:2</button>
+          <button type="button" data-aspect="4:5">4:5</button>
+          <button type="button" data-aspect="1:1">1:1</button>
+          <button type="button" data-aspect="16:9">16:9</button>
+        </div>
+        <div class="ed-buttons">
+          <button id="ed-cropbtn" class="btn" type="button">Crop</button>
+          <button id="ed-cropclear" class="btn" type="button">No crop</button>
+        </div>
+        <div class="ed-row" data-key="angle">
+          <div class="ed-top"><span class="ed-label">Straighten</span><span class="ed-val" id="ed-v-angle"></span></div>
+          <input id="ed-angle" type="range" min="-15" max="15" step="0.1">
+        </div>
+      </div>
+      <div class="ed-group">
+        <div class="label">Light</div>
+        <div class="ed-row" data-key="exposure">
+          <div class="ed-top"><span class="ed-label">Exposure</span><span class="ed-val" id="ed-v-exposure"></span></div>
+          <input id="ed-exposure" type="range" min="-3" max="3" step="0.05">
+        </div>
+        <div class="ed-row" data-key="contrast">
+          <div class="ed-top"><span class="ed-label">Contrast</span><span class="ed-val" id="ed-v-contrast"></span></div>
+          <input id="ed-contrast" type="range" min="-100" max="100" step="1">
+        </div>
+        <div class="ed-row" data-key="highlights">
+          <div class="ed-top"><span class="ed-label">Highlights</span><span class="ed-val" id="ed-v-highlights"></span></div>
+          <input id="ed-highlights" type="range" min="-100" max="100" step="1">
+        </div>
+        <div class="ed-row" data-key="shadows">
+          <div class="ed-top"><span class="ed-label">Shadows</span><span class="ed-val" id="ed-v-shadows"></span></div>
+          <input id="ed-shadows" type="range" min="-100" max="100" step="1">
+        </div>
+      </div>
+      <div class="ed-group">
+        <div class="label">Colour</div>
+        <div class="ed-row" data-key="temp">
+          <div class="ed-top"><span class="ed-label">Temperature</span><span class="ed-val" id="ed-v-temp"></span></div>
+          <input id="ed-temp" type="range" min="-100" max="100" step="1">
+        </div>
+        <div class="ed-row" data-key="tint">
+          <div class="ed-top"><span class="ed-label">Tint</span><span class="ed-val" id="ed-v-tint"></span></div>
+          <input id="ed-tint" type="range" min="-100" max="100" step="1">
+        </div>
+        <div class="ed-row" data-key="saturation">
+          <div class="ed-top"><span class="ed-label">Saturation</span><span class="ed-val" id="ed-v-saturation"></span></div>
+          <input id="ed-saturation" type="range" min="-100" max="100" step="1">
+        </div>
+        <div class="setrow ed-bw">
+          <div class="what"><div class="t">Black and white</div></div>
+          <button id="ed-bw" class="toggle" type="button"><span></span></button>
+        </div>
+      </div>
+      <div class="ed-group">
+        <div class="label">Detail</div>
+        <div class="ed-row" data-key="sharpen">
+          <div class="ed-top"><span class="ed-label">Sharpening</span><span class="ed-val" id="ed-v-sharpen"></span></div>
+          <input id="ed-sharpen" type="range" min="0" max="100" step="1">
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ================================================================== EXPORTS -->
+<section id="view-exports" class="view">
+  <div class="grid-bar">
+    <div id="ex-summary" class="body"></div>
+    <div class="grow"></div>
+    <button id="ex-usb" class="btn" type="button">Copy to USB</button>
+    <button id="ex-phone" class="btn primary" type="button">Send to phone</button>
+  </div>
+  <div class="grid-wrap scroll">
+    <div id="ex-empty" class="empty" hidden>No exports yet. Open a photo, tap Edit, then Export JPEG.</div>
+    <div id="ex-list"></div>
+  </div>
+</section>
+
+<!-- ============================================================ SETUP WIZARD -->
+<div id="wizard" class="veil wiz" hidden>
+  <div class="wiz-box">
+    <div class="wiz-top">
+      <div id="wiz-step" class="label"></div>
+      <div class="wiz-dots" id="wiz-dots"></div>
+      <div class="grow"></div>
+      <button id="wiz-skip" class="btn" type="button">Close</button>
+    </div>
+    <div class="wiz-main scroll">
+      <div id="wiz-title" class="h1"></div>
+      <div id="wiz-lead" class="lead"></div>
+      <div id="wiz-body" class="wiz-body"></div>
+    </div>
+    <div class="wiz-nav">
+      <button id="wiz-back" class="btn big-btn" type="button">Back</button>
+      <div class="grow"></div>
+      <button id="wiz-next" class="btn big-btn solid" type="button">Next</button>
+    </div>
+  </div>
+</div>
+
+<!-- =========================================================== EXPORT DIALOG -->
+<div id="export-modal" class="veil" hidden>
+  <div class="card modal">
+    <div class="h1">Export JPEG</div>
+    <div id="xm-text" class="lead"></div>
+    <div class="xm-row"><div class="label">Size</div>
+      <div id="xm-size" class="seg small">
+        <button type="button" data-size="full">Full size</button>
+        <button type="button" data-size="2048">2048 px</button>
+        <button type="button" data-size="1080">1080 px</button>
+      </div>
+    </div>
+    <div class="xm-row"><div class="label">Quality</div>
+      <div id="xm-quality" class="seg small">
+        <button type="button" data-quality="high">High</button>
+        <button type="button" data-quality="standard">Standard</button>
+      </div>
+    </div>
+    <div id="xm-progress" class="xm-progress" hidden><div class="meter"><div id="xm-bar"></div></div><div id="xm-status" class="body"></div></div>
+    <div class="modal-actions">
+      <button id="xm-cancel" class="btn big-btn" type="button">Close</button>
+      <button id="xm-all" class="btn big-btn" type="button">All edited (0)</button>
+      <button id="xm-one" class="btn big-btn primary" type="button">This photo</button>
+    </div>
+  </div>
+</div>
+
+<!-- =========================================================== RENAME DIALOG -->
+<div id="rename-modal" class="veil" hidden>
+  <div class="card modal">
+    <div class="h1">Rename photos</div>
+    <div id="rn-text" class="lead"></div>
+    <div class="setrow rn-pattern">
+      <div class="what"><div class="t">Pattern</div><div id="rn-pattern" class="body mono"></div></div>
+      <button id="rn-edit" class="btn" type="button">Change</button>
+    </div>
+    <div id="rn-sample" class="rn-sample"></div>
+    <div class="modal-actions">
+      <button id="rn-cancel" class="btn big-btn" type="button">Cancel</button>
+      <button id="rn-go" class="btn big-btn primary" type="button">Rename</button>
+    </div>
+  </div>
+</div>
+
+<!-- ============================================================ PHONE DIALOG -->
+<div id="phone-modal" class="veil" hidden>
+  <div class="card modal pm">
+    <div class="h1">Send to phone</div>
+    <div id="pm-text" class="lead"></div>
+    <div id="pm-codes" class="pm-codes" hidden>
+      <div class="pm-step">
+        <div class="pm-n">1</div>
+        <div class="t">Join the tablet's Wi-Fi</div>
+        <div id="pm-qr-wifi" class="pm-qr"></div>
+        <div id="pm-wifi" class="body mono"></div>
+      </div>
+      <div class="pm-step">
+        <div class="pm-n">2</div>
+        <div class="t">Open the photos</div>
+        <div id="pm-qr-url" class="pm-qr"></div>
+        <div id="pm-url" class="body mono"></div>
+      </div>
+    </div>
+    <div id="pm-status" class="body"></div>
+    <div class="modal-actions">
+      <button id="pm-close" class="btn big-btn" type="button">Stop sharing</button>
+      <button id="pm-hotspot" class="btn big-btn primary" type="button" hidden>Turn on hotspot</button>
+    </div>
+  </div>
+</div>
+
+<!-- ============================================================== USB DIALOG -->
+<div id="usb-modal" class="veil" hidden>
+  <div class="card modal">
+    <div class="h1">Copy to USB</div>
+    <div id="um-text" class="lead"></div>
+    <div id="um-drives" class="um-drives"></div>
+    <div id="um-progress" class="xm-progress" hidden><div class="meter"><div id="um-bar"></div></div><div id="um-status" class="body"></div></div>
+    <div class="modal-actions">
+      <button id="um-close" class="btn big-btn" type="button">Close</button>
+      <button id="um-eject" class="btn big-btn" type="button" hidden>Eject</button>
+      <button id="um-copy" class="btn big-btn primary" type="button">Copy</button>
+    </div>
+  </div>
+</div>
+
+<!-- ================================================================= SETTINGS -->
+<section id="view-settings" class="view">
+  <div class="settings">
+    <div class="rail">
+      <button class="btn" type="button" data-sec="display"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M2 12h2M20 12h2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M19.1 4.9l-1.4 1.4M6.3 17.7l-1.4 1.4"/></svg>Display and theme</button>
+      <button class="btn" type="button" data-sec="folders"><svg viewBox="0 0 24 24"><path d="M3 6h7l2 3h9v10H3z"/></svg>Folders and naming</button>
+      <button class="btn" type="button" data-sec="second"><svg viewBox="0 0 24 24"><rect x="6" y="3" width="12" height="18" rx="1"/><path d="M9 3v4M12 3v4M15 3v4"/></svg>Second copy</button>
+      <button class="btn" type="button" data-sec="network"><svg viewBox="0 0 24 24"><path d="M2.5 9a13.5 13.5 0 0 1 19 0M5.5 12a9.2 9.2 0 0 1 13 0M8.5 15a5 5 0 0 1 7 0"/><circle cx="12" cy="18.5" r="1.2" fill="currentColor"/></svg>Network</button>
+      <button class="btn" type="button" data-sec="bluetooth"><svg viewBox="0 0 24 24"><path d="M7 7l10 10-5 4V3l5 4L7 17"/></svg>Bluetooth</button>
+      <button class="btn" type="button" data-sec="nas"><svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="7" rx="1"/><rect x="3" y="13" width="18" height="7" rx="1"/><path d="M7 7.5h.01M7 16.5h.01"/></svg>NAS</button>
+      <button class="btn" type="button" data-sec="rules"><svg viewBox="0 0 24 24"><path d="M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6z"/></svg>Backup rules</button>
+      <button class="btn" type="button" data-sec="device"><svg viewBox="0 0 24 24"><rect x="6" y="2" width="12" height="20" rx="2"/><path d="M11 18h2"/></svg>Device</button>
+      <div class="grow"></div>
+      <div id="set-saved" class="saved"></div>
+    </div>
+
+    <div class="panel scroll" data-panel="display">
+      <div class="setrow look-row">
+        <div class="what"><div class="t">Look</div><div class="body">Classic is the bold, high-contrast look. Cockpit is calmer, with thin lines and large numbers.</div></div>
+        <div class="seg" id="set-look">
+          <button type="button" data-v="classic">Classic</button>
+          <button type="button" data-v="cockpit">Cockpit</button>
+        </div>
+      </div>
+      <div class="setrow look-row">
+        <div class="what"><div class="t">Screen dark after</div><div class="body">With no touch for this long. Never during a backup from the camera. A touch, or plugging in the camera, lights it again.</div></div>
+        <div class="seg small" id="set-dark">
+          <button type="button" data-v="2">2 min</button>
+          <button type="button" data-v="5">5 min</button>
+          <button type="button" data-v="10">10 min</button>
+          <button type="button" data-v="0">Never</button>
+        </div>
+      </div>
+      <div class="setrow look-row">
+        <div class="what"><div class="t">On battery, sleep after</div><div id="set-sleep-text" class="body"></div></div>
+        <div class="seg small" id="set-sleep">
+          <button type="button" data-v="15">15 min</button>
+          <button type="button" data-v="30">30 min</button>
+          <button type="button" data-v="60">1 hour</button>
+          <button type="button" data-v="0">Never</button>
+        </div>
+      </div>
+      <div class="setrow look-row">
+        <div class="what"><div class="t">Boot screen</div><div id="set-splash-text" class="body"></div></div>
+        <button id="set-splash" class="toggle" type="button"><span></span></button>
+      </div>
+      <div class="label">Theme</div>
+      <div class="themes" id="themes-cockpit">
+        <button class="theme" type="button" data-cockpit-pick="cockpit">
+          <div class="sw" style="background:#0A0E12"><div class="b" style="background:#0A0E12;border-bottom:1px solid #1E2833"></div><div class="p"><div style="background:#4CC9F0;border-radius:4px"></div><div style="background:#121820;border:1px solid #1E2833;border-radius:4px"></div></div></div>
+          <div class="h3">Cockpit Dark</div><div class="body">Dark panels with cyan.</div>
+        </button>
+        <button class="theme" type="button" data-cockpit-pick="cockpit-light">
+          <div class="sw" style="background:#EEF1F4"><div class="b" style="background:#FFFFFF;border-bottom:1px solid #D5DCE3"></div><div class="p"><div style="background:#0A7FB0;border-radius:4px"></div><div style="background:#FFFFFF;border:1px solid #C9D2DB;border-radius:4px"></div></div></div>
+          <div class="h3">Cockpit Light</div><div class="body">The same look on white, for bright light.</div>
+        </button>
+        <button class="theme" type="button" data-cockpit-pick="cockpit-red">
+          <div class="sw" style="background:#000"><div class="b" style="background:#000;border-bottom:1px solid #2A0806"></div><div class="p"><div style="background:#C0281E;border-radius:4px"></div><div style="background:#0A0000;border:1px solid #4A100A;border-radius:4px"></div></div></div>
+          <div class="h3">Cockpit Red</div><div class="body">Red on black. Keeps your night vision.</div>
+        </button>
+      </div>
+      <div class="themes" id="themes-classic">
+        <button class="theme" type="button" data-theme-pick="daylight">
+          <div class="sw" style="background:#E9EBE6"><div class="b" style="background:#0B0F12"></div><div class="p"><div style="background:#FF6A13"></div><div style="background:#fff;border:2px solid #0B0F12"></div></div></div>
+          <div class="h3">Daylight</div><div class="body">High contrast for bright sun.</div>
+        </button>
+        <button class="theme" type="button" data-theme-pick="slate">
+          <div class="sw" style="background:#3B4046"><div class="b" style="background:#202326"></div><div class="p"><div style="background:#FFB000"></div><div style="background:#4B5158"></div></div></div>
+          <div class="h3">Slate</div><div class="body">Neutral grey for judging photos.</div>
+        </button>
+        <button class="theme" type="button" data-theme-pick="night">
+          <div class="sw" style="background:#0E1215"><div class="b" style="background:#05070A"></div><div class="p"><div style="background:#C8580F"></div><div style="background:#192026;border:2px solid #34404A"></div></div></div>
+          <div class="h3">Night</div><div class="body">Dark panels for dusk and night.</div>
+        </button>
+        <button class="theme" type="button" data-theme-pick="nightred">
+          <div class="sw" style="background:#000"><div class="b" style="background:#120000"></div><div class="p"><div style="background:#9E1F16"></div><div style="background:#0B0000;border:2px solid #5A140D"></div></div></div>
+          <div class="h3">Night Red</div><div class="body">Red on black. Keeps your night vision.</div>
+        </button>
+      </div>
+      <div class="body">The theme changes the screens only. Photos always show their own colours.</div>
+    </div>
+
+    <div class="panel scroll" data-panel="folders" hidden>
+      <div class="card">
+        <div class="setrow">
+          <div class="what"><div class="t">Shoot folders</div><div class="body">Each backup gets a folder of its own: the day, the name typed (or import) and a number. <span class="mono">2026_1015_import_01</span>, then <span class="mono">_02</span>.</div></div>
+        </div>
+        <div class="setrow">
+          <div class="what"><div class="t">Library</div><div id="set-library" class="body mono"></div></div>
+        </div>
+      </div>
+      <div class="card">
+        <div class="t lead">One-tap shoot names</div>
+        <div class="body">Offered when a backup starts, before the names used most recently. Tap a name to remove it.</div>
+        <div id="set-names" class="chips" style="margin-top:.75rem"></div>
+        <div class="namebox">
+          <button id="set-addname" class="btn" type="button">Add a name</button>
+        </div>
+      </div>
+      <div class="card">
+        <div class="t lead">Photo names</div>
+        <div class="setrow">
+          <div class="what"><div class="t">Rename photos on import</div><div class="body">Off: photos keep the camera's names, such as DSC_4841.NEF. A shoot already on the tablet can be renamed from its photos screen.</div></div>
+          <button id="set-rename" class="toggle" type="button"><span></span></button>
+        </div>
+        <div class="setrow">
+          <div class="what"><div class="t">Pattern</div><div id="set-rename-pattern" class="body mono"></div><div id="set-rename-example" class="body"></div></div>
+          <button id="set-rename-edit" class="btn" type="button">Change</button>
+        </div>
+        <div id="set-rename-presets" class="chips"></div>
+        <div id="set-rename-tokens" class="body muted tokens"></div>
+      </div>
+    </div>
+
+    <div class="panel scroll" data-panel="second" hidden>
+      <div class="card">
+        <div class="setrow">
+          <div class="what"><div class="t">Second copy</div><div class="body">After each backup, copy the photos to a microSD card or a USB drive and read each one back.</div></div>
+          <button id="set-second" class="toggle" type="button"><span></span></button>
+        </div>
+        <div class="setrow">
+          <div class="what"><div class="t">Where it goes</div><div id="set-device-text" class="body"></div></div>
+          <div class="seg" id="set-second-device">
+            <button type="button" data-v="microsd">microSD card</button>
+            <button type="button" data-v="usb">USB drive <span class="beta">Beta</span></button>
+          </div>
+        </div>
+        <div class="setrow">
+          <div class="what"><div class="t" id="set-card-title"></div><div id="set-card-text" class="body"></div></div>
+          <button id="set-card-use" class="btn" type="button" hidden>Prepare this <span class="kw">card</span></button>
+          <button id="set-card-ignore" class="btn" type="button" hidden>Don't use it</button>
+        </div>
+        <div class="setrow">
+          <div class="what"><div class="t" id="set-folder-title">Folder on the card</div><div id="set-card-folder" class="body mono"></div></div>
+        </div>
+      </div>
+      <div class="body">A card or drive is erased only when you prepare it for DoubleTake or format it here, each after you confirm. Otherwise DoubleTake writes only inside its own folder.</div>
+    </div>
+
+    <div class="panel scroll" data-panel="network" hidden>
+      <div class="card">
+        <div class="setrow">
+          <div class="what"><div class="t">Wi-Fi</div><div id="net-wifi-text" class="body"></div></div>
+          <button id="net-disconnect" class="btn" type="button" hidden>Disconnect</button>
+        </div>
+        <div class="setrow">
+          <div class="what"><div class="t">Cable</div><div id="net-wired-text" class="body"></div></div>
+        </div>
+        <div class="setrow">
+          <div class="what"><div class="t">FSDC: Field Station Direct Connect</div><div class="body">When a network cable finds no network, as when it is plugged straight into a laptop, the tablet links to the laptop by itself after about 20 seconds. The top bar shows Linking, then FSDC. On the laptop, open smb://<span id="net-direct-host">doubletake</span>.local. Plugged into a router or the dock, the cable works as usual.</div></div>
+          <button id="net-direct" class="toggle" type="button"><span></span></button>
+        </div>
+        <div id="net-job" class="setrow" hidden>
+          <div class="what"><div id="net-job-text" class="t"></div></div>
+        </div>
+      </div>
+      <div class="card">
+        <div class="setrow">
+          <div class="what"><div class="t">Wi-Fi networks</div><div class="body">Tap a network to join it. A password is asked for only the first time.</div></div>
+          <button id="net-scan" class="btn" type="button">Look for networks</button>
+        </div>
+        <div id="net-list" class="net-list"></div>
+      </div>
+      <div class="card">
+        <div class="setrow">
+          <div class="what"><div class="t">Hotspot for the laptop</div>
+            <div class="body">The tablet makes its own Wi-Fi network for the laptop to join. While it is on, the tablet is not on any other Wi-Fi network.</div></div>
+          <button id="net-hotspot" class="toggle" type="button"><span></span></button>
+        </div>
+        <div class="setrow">
+          <div class="what"><div class="t">Network name</div><div id="net-hs-name" class="body mono"></div></div>
+          <button id="net-hs-rename" class="btn" type="button">Change</button>
+        </div>
+        <div class="setrow">
+          <div class="what"><div class="t">Password</div><div id="net-hs-pass" class="body mono"></div></div>
+          <button id="net-hs-repass" class="btn" type="button">Change</button>
+        </div>
+        <div id="net-hs-help" class="body"></div>
+      </div>
+    </div>
+
+    <div class="panel scroll" data-panel="bluetooth" hidden>
+      <div id="bt-missing" class="card" hidden>
+        <div class="t lead">Bluetooth is not ready</div>
+        <div id="bt-missing-text" class="body"></div>
+      </div>
+      <div id="bt-main">
+        <div class="card">
+          <div class="setrow">
+            <div class="what"><div class="t">Bluetooth</div><div id="bt-text" class="body"></div></div>
+            <button id="bt-power" class="toggle" type="button"><span></span></button>
+          </div>
+          <div id="bt-job" class="setrow" hidden><div class="what"><div id="bt-job-text" class="t"></div></div></div>
+        </div>
+        <div class="card">
+          <div class="t lead">Paired</div>
+          <div id="bt-paired" class="bt-list"></div>
+        </div>
+        <div class="card">
+          <div class="setrow">
+            <div class="what"><div class="t">Pair a new device</div><div class="body">For a keyboard, mouse or the like. Put it in pairing mode first. The camera is not paired here: photos come over USB.</div></div>
+            <button id="bt-scan" class="btn" type="button">Look for devices</button>
+          </div>
+          <div id="bt-nearby" class="bt-list"></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="panel scroll" data-panel="nas" hidden>
+      <div id="nas-missing" class="card" hidden>
+        <div class="t lead">Not set up yet</div>
+        <div class="body">The NAS needs a one-time setup. Run doubletake setup in a terminal with the tablet online: it asks for your password once, then everything here works without it.</div>
+      </div>
+      <div id="nas-hidden" class="card warn-card" hidden>
+        <div class="setrow">
+          <div class="what"><div class="t">Computers cannot see the share here</div><div id="nas-hidden-text" class="body"></div></div>
+          <button id="nas-hidden-fix" class="btn" type="button"></button>
+        </div>
+      </div>
+      <div class="card">
+        <div class="setrow">
+          <div class="what"><div class="t">Shared folder</div><div id="nas-share-text" class="body"></div></div>
+          <button id="nas-share" class="toggle" type="button"><span></span></button>
+        </div>
+        <div class="setrow">
+          <div class="what"><div class="t">SFTP</div><div id="nas-sftp-text" class="body"></div></div>
+          <button id="nas-sftp" class="toggle" type="button"><span></span></button>
+        </div>
+        <div id="nas-job" class="setrow" hidden><div class="what"><div id="nas-job-text" class="t"></div></div></div>
+      </div>
+      <div class="card">
+        <div class="setrow">
+          <div class="what"><div class="t">Login</div><div id="nas-login-text" class="body"></div></div>
+          <button id="nas-login" class="btn" type="button">Change</button>
+        </div>
+      </div>
+      <div class="card">
+        <div class="t lead">Allowed on</div>
+        <div class="body">The share can be seen only on these. Anywhere else, such as an airport or hotel Wi-Fi, the firewall keeps it closed.</div>
+        <div class="setrow">
+          <div class="what"><div class="t">The cable</div><div class="body">The dock's network port, or any network cable.</div></div>
+          <button id="nas-cable" class="toggle" type="button"><span></span></button>
+        </div>
+        <div class="setrow">
+          <div class="what"><div class="t">The tablet's hotspot</div><div class="body">For the laptop in the field.</div></div>
+          <button id="nas-hotspot" class="toggle" type="button"><span></span></button>
+        </div>
+        <div id="nas-wifi" class="nas-wifi"></div>
+      </div>
+      <div class="card">
+        <div class="t lead">Connect from a computer</div>
+        <div id="nas-how" class="body"></div>
+      </div>
+    </div>
+
+    <div class="panel scroll" data-panel="rules" hidden>
+      <div class="card">
+        <div class="setrow">
+          <div class="what"><div class="t">Back up when the camera is plugged in</div><div id="set-auto-text" class="body"></div></div>
+          <button id="set-auto" class="toggle" type="button"><span></span></button>
+        </div>
+        <div class="setrow" id="set-auto-dark-row">
+          <div class="what"><div class="t">Dark screen between backups</div><div class="body">A minute after an unattended backup, the screen goes dark. The tablet stays awake: plugging in the camera, or a touch, lights it again.</div></div>
+          <button id="set-auto-dark" class="toggle" type="button"><span></span></button>
+        </div>
+        <div class="setrow">
+          <div class="what"><div class="t">Backup beeps</div><div class="body">One beep as a backup starts, two when it is done, three low ones when it needs a look. Stopped by hand: no beep.</div></div>
+          <button id="set-auto-chime" class="toggle" type="button"><span></span></button>
+        </div>
+        <div class="setrow">
+          <div class="what"><div class="t">What to copy</div><div id="set-copy-text" class="body"></div></div>
+          <div class="seg" id="set-copy">
+            <button type="button" data-v="raw">RAW only</button>
+            <button type="button" data-v="raw_jpeg">RAW + JPEG</button>
+            <button type="button" data-v="all">Everything</button>
+          </div>
+        </div>
+      </div>
+      <div class="body">Shoots are deleted in the shoot library, never by themselves, and not within a day of being copied. The camera's cards are never touched: format them in the camera.</div>
+    </div>
+
+    <div class="panel scroll" data-panel="device" hidden>
+      <div class="card">
+        <div class="setrow">
+          <div class="what"><div class="t">Start at power-on</div><div id="set-login-text" class="body"></div></div>
+          <button id="set-login" class="toggle" type="button"><span></span></button>
+        </div>
+        <div class="setrow">
+          <div class="what"><div class="t">DoubleTake password</div><div id="set-pw-text" class="body"></div></div>
+          <button id="set-pw" class="btn" type="button">Set</button>
+          <button id="set-pw-none" class="btn" type="button">No password</button>
+        </div>
+        <div class="setrow">
+          <div class="what"><div class="t">DoubleTake only</div><div id="set-kiosk-text" class="body"></div></div>
+          <button id="set-kiosk" class="toggle" type="button"><span></span></button>
+        </div>
+        <div class="setrow">
+          <div class="what"><div class="t">Updates</div><div class="body">In Maintenance mode, installed only if you say so; sooner for a security fix. Off: never, not even security fixes. Any time: doubletake update</div></div>
+          <div class="seg small" id="set-updates">
+            <button type="button" data-v="30">30 days</button>
+            <button type="button" data-v="60">60 days</button>
+            <button type="button" data-v="90">90 days</button>
+            <button type="button" data-v="0">Off</button>
+          </div>
+        </div>
+        <div class="setrow">
+          <div class="what"><div class="t">Tablet status</div><div class="body">Version, photos on Copy 1 and Copy 2, and the batteries. P3 opens it too, on tablets with that key.</div></div>
+          <button id="set-status" class="btn" type="button">Show</button>
+        </div>
+        <div class="setrow" id="set-flicker-row" hidden>
+          <div class="what"><div class="t">Screen flicker fix</div><div id="set-flicker-text" class="body"></div></div>
+          <button id="set-flicker" class="toggle" type="button"><span></span></button>
+        </div>
+        <div class="setrow">
+          <div class="what"><div class="t">Reconfigure tablet</div><div class="body">Walk through the main choices again: password, what to copy, Copy 2, NAS, hotspot and start-up.</div></div>
+          <button id="set-wizard" class="btn" type="button">Reconfigure</button>
+        </div>
+        <div class="setrow" id="dev-desktop-row" hidden>
+          <div class="what"><div class="t">Maintenance mode</div><div class="body">Logs out to the plain desktop for one visit, for upgrades and settings. Restart the tablet to return to DoubleTake.</div></div>
+          <button id="dev-desktop" class="btn" type="button">Maintenance</button>
+        </div>
+        <div class="setrow">
+          <div class="what"><div class="t">Restart or shut down</div><div class="body">Waits for a backup from the camera. The second copy stops at a safe point and carries on next time.</div></div>
+          <button id="dev-restart" class="btn" type="button">Restart</button>
+          <button id="dev-shutdown" class="btn" type="button">Shut down</button>
+        </div>
+        <div class="setrow" id="set-apps-row">
+          <div class="what"><div class="t">Desktop apps</div><div class="body">Open on top of the screens.</div></div>
+          <button id="set-files" class="btn" type="button">Files</button>
+          <button id="set-terminal" class="btn" type="button">Terminal</button>
+        </div>
+        <div class="setrow" id="dev-exit-row">
+          <div class="what"><div class="t">Exit to the desktop</div><div class="body">Closes the screens. Start them again from the app list, or with: doubletake gui</div></div>
+          <button id="dev-exit" class="btn" type="button">Exit</button>
+        </div>
+      </div>
+      <div class="card">
+        <div class="setrow">
+          <div class="what"><div class="t">Memory card</div><div class="body">Erase the microSD card and start it again as an empty second copy. The camera's cards are formatted in the camera.</div></div>
+          <button id="dev-format" class="btn" type="button">Format</button>
+        </div>
+        <div class="setrow">
+          <div class="what"><div class="t">Reset settings</div><div class="body">Settings back to how they came, and the NAS switched off. Photos and records stay.</div></div>
+          <button id="dev-reset" class="btn" type="button">Reset</button>
+        </div>
+        <div class="setrow">
+          <div class="what"><div class="t">Erase everything</div><div class="body">Every photo and record on the tablet, and the settings. The microSD card is left as it is.</div></div>
+          <button id="dev-erase" class="btn danger" type="button">Erase</button>
+        </div>
+      </div>
+      <div class="card" id="dev-batteries" hidden>
+        <div class="label">Batteries</div>
+        <div id="dev-battery-rows"></div>
+      </div>
+      <div class="card">
+        <div class="label">About</div>
+        <div id="set-about" class="about" style="margin-top:.75rem"></div>
+      </div>
+      <div class="card">
+        <div class="label">Folders</div>
+        <div id="set-folders-about" class="about" style="margin-top:.75rem"></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ================================================================= KEYBOARD -->
+<div id="kbd" class="veil kbd-veil" hidden>
+  <div class="card kbd">
+    <div class="kbd-top">
+      <div id="kbd-label" class="label"></div>
+      <div class="kbd-field"><span id="kbd-text" class="mono"></span><span class="caret"></span></div>
+      <div id="kbd-hint" class="small muted"></div>
+    </div>
+    <div id="kbd-chips" class="chips"></div>
+    <div id="kbd-keys" class="kbd-keys"></div>
+  </div>
+</div>
+
+<!-- ================================================================== CONFIRM -->
+<div id="confirm" class="veil" hidden>
+  <div class="card modal">
+    <div id="confirm-title" class="h1"></div>
+    <div id="confirm-text" class="lead"></div>
+    <div class="confirm-actions">
+      <button id="confirm-no" class="btn big-btn" type="button">Cancel</button>
+      <button id="confirm-yes" class="btn big-btn danger" type="button"></button>
+    </div>
+  </div>
+</div>
+
+<!-- ============================================================ CARD POP-UP -->
+<div id="modal" class="veil" hidden>
+  <div class="card modal">
+    <div class="label">Copy 2</div>
+    <div id="modal-title" class="h1"></div>
+    <div id="modal-card" class="mono modal-card"></div>
+    <div id="modal-lead" class="lead">DoubleTake keeps the second copy of every photo on a <span class="kw">card</span> of its own. To use this <span class="kw">card</span>, DoubleTake erases all of it and keeps it for photos alone.</div>
+    <div class="lead">Readable afterwards on a Mac, Windows or Linux computer, so the photos on it are never locked in.</div>
+    <div id="modal-error" class="lead warn" hidden></div>
+    <div class="modal-actions">
+      <button id="btn-card-no" class="btn big-btn" type="button">Not this one</button>
+      <button id="btn-card-yes" class="btn big-btn solid" type="button">Prepare for DoubleTake</button>
+    </div>
+  </div>
+</div>
+
+<!-- ============================================================ UNATTENDED -->
+<div id="auto" class="veil" hidden>
+  <div class="card modal auto-box">
+    <div class="label">Back up when the camera is plugged in</div>
+    <div id="auto-title" class="h1"></div>
+    <div id="auto-text" class="lead"></div>
+    <div class="confirm-actions">
+      <button id="auto-now" class="btn big-btn" type="button">Start now</button>
+      <button id="auto-cancel" class="btn big-btn solid" type="button">Cancel</button>
+    </div>
+  </div>
+</div>
+
+<div id="gone" class="veil dark" hidden>
+  <div class="gone-box">
+    <div id="gone-title" class="h1"></div>
+    <div id="gone-text" class="lead"></div>
+  </div>
+</div>
+
+<!-- The tablet's status (P3, or Settings, Device): a tap anywhere closes it. -->
+<div id="status" class="veil" hidden>
+  <div class="status-box">
+    <div class="status-head"><div class="h1">Tablet status</div><div id="status-sub" class="body"></div></div>
+    <div class="status-grid">
+      <div class="status-card"><div class="label">DoubleTake</div><div id="status-dt"></div></div>
+      <div class="status-card"><div class="label">Photos</div><div id="status-photos"></div></div>
+      <div class="status-card"><div class="label">Copy 1 · tablet</div><div id="status-copy1"></div></div>
+      <div class="status-card"><div class="label" id="status-copy2-label">Copy 2</div><div id="status-copy2"></div></div>
+    </div>
+    <div class="label status-bat-label">Batteries</div>
+    <div id="status-batteries" class="status-grid"></div>
+    <div class="body status-close">Tap anywhere, or press P3, to close.</div>
+  </div>
+</div>
+
+<!-- The volume and brightness keys: the level, for a moment. -->
+<div id="osd" class="osd" hidden><span id="osd-label"></span><div class="osd-bar"><span id="osd-fill"></span></div><span id="osd-value" class="tab"></span></div>
+
+<!-- On the way out: each real step, as it finishes. -->
+<div id="switching" hidden><div id="switching-lines"></div></div>
+
+<!-- The screen gone dark: a black cover. The first touch lights the screen and presses nothing. -->
+<div id="blackout" hidden></div>
+
+<script src="app.js"></script>
+</body>
+</html>

@@ -1,0 +1,54 @@
+# Builds the two DoubleTake packages (el9 for Rocky / Red Hat / Alma 9, fc for Fedora), runs
+# the tests, and puts the packages, install.sh and SHA256SUMS together as one download.
+# On a version tag (v1.0.1c, ...) the same files are attached to that tag's release, ready
+# for Maintenance mode's updater, which checks every file against SHA256SUMS.
+name: Build packages
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Tools
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q rpm python3-pip python3-pil
+
+      - name: Tests
+        run: python3 -m unittest discover -s tests -q
+
+      - name: Packages
+        run: bash packaging/build-rpm.sh dist
+
+      - name: install.sh and checksums
+        run: |
+          cp packaging/install.sh dist/
+          cd dist
+          ls doubletake-*.rpm install.sh
+          sha256sum doubletake-*.rpm install.sh > SHA256SUMS
+          cat SHA256SUMS
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: doubletake-packages
+          path: |
+            dist/doubletake-*.rpm
+            dist/install.sh
+            dist/SHA256SUMS
+
+      - name: Attach to the release
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1 || gh release create "$GITHUB_REF_NAME" --draft --title "DoubleTake ${GITHUB_REF_NAME#v}" --notes "See CHANGELOG.md."
+          gh release upload "$GITHUB_REF_NAME" dist/doubletake-*.rpm dist/install.sh dist/SHA256SUMS --clobber

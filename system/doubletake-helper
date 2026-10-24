@@ -1,0 +1,2025 @@
+#!/usr/bin/python3 -I
+"""DoubleTake's helper for the few jobs that need root.
+
+setup.sh installs this file as /usr/local/libexec/doubletake-helper, owned by
+root, and lets the tablet's user run it, and only it, through sudo without a
+password. That is how the screens can switch the NAS on and off without asking.
+
+Because it runs as root, it does a short, fixed list of jobs and checks every
+argument it is given:
+
+    install --library PATH       set up Samba, SFTP, the firewall and SELinux once
+    set-user NAME                create or rename the share's login (password on stdin)
+    nas on|off                   start or stop the shared folder (Samba)
+    sftp on|off                  start or stop SFTP
+    zone UUID home|public [DEV]  trust or untrust a network the tablet knows
+    hotspot-zone on|off          allow the share on the tablet's own hotspot, or not
+    format-card DEVICE LABEL     format the microSD card as exFAT
+    prepare-drive DISK LABEL     erase a whole microSD card or USB drive for DoubleTake: one exFAT partition
+    autologin on|off             log the tablet's user in at power-on, or stop
+    session kiosk|desktop        log the tablet's user in to DoubleTake only, or to the desktop
+    splash on|off|refresh|tune   show the DoubleTake logo while the tablet starts, or the usual screen;
+                                 refresh rebuilds the start-up images after an upgrade;
+                                 tune times the shutdown fade to the last shutdown
+    fs-password status|check|set|none|clear
+                                 the DoubleTake password (passwords on stdin; clear only from a root shell)
+    phone-port on|off DEV        open the phone download page on the hotspot, while it runs
+    status-check                 make sure the status writer runs while the NAS is on
+    status-loop                  (run by systemd) write who is connected, every 3 s
+    reset                        stop everything and remove the share's login
+    boot-entry on|off|refresh    the boot menu's DoubleTake maintenance (desktop) entry;
+                                 refresh points it at the current kernel
+    boot-check                   (run by systemd before the login screen) a visit chosen there?
+    boot-maintenance done        that visit has begun: automatic login and DoubleTake only as before
+    migrate-old-names            move settings, the NAS and the boot screen over from the name
+                                 Field Station, used before 0.8.1
+
+It is self-contained on purpose: it imports nothing from the program in the
+user's home folder, which the user can change. Every answer is one line of JSON.
+"""
+
+import hashlib
+import hmac
+import zlib
+import errno
+import json
+import os
+import pwd
+import re
+import shutil
+import struct
+import subprocess
+import sys
+import time
+
+SFTP_PORT = 2222
+# Where the helper lives: /usr/libexec when installed from the DoubleTake package (RPM),
+# /usr/local/libexec when installed by setup.sh.
+HELPER_PATHS = ("/usr/libexec/doubletake-helper", "/usr/local/libexec/doubletake-helper")
+HELPER_PATH = HELPER_PATHS[0] if os.path.isfile(HELPER_PATHS[0]) else HELPER_PATHS[1]
+NAME_RE = re.compile(r"^[a-z_][a-z0-9_-]{0,30}$")
+# The tablet's own login can be anything the OS installer accepted, digits first included
+# ("3sfpdd3"); only an all-digit name is refused, as sudo would read it as a user number.
+OWNER_RE = re.compile(r"^(?![0-9]+$)[A-Za-z0-9_][A-Za-z0-9_.-]{0,31}$")
+UUID_RE = re.compile(r"^[0-9a-fA-F-]{36}$")
+DEV_RE = re.compile(r"^[a-zA-Z0-9._-]{1,15}$")
+CARD_RE = re.compile(r"^/dev/(mmcblk[0-9]+p[0-9]+|sd[a-z][0-9]+)$")
+LABEL_RE = re.compile(r"^[A-Za-z0-9 _-]{1,11}$")
+RESERVED = {"root", "bin", "daemon", "adm", "nobody", "admin", "guest", "smb", "samba", "sshd", "ftp"}
+TRUSTED_ZONES = ("home", "nm-shared")
+
+
+class Refused(Exception):
+    """A request this helper will not carry out, with the reason."""
+
+
+class System:
+    """The machine, as this helper sees it. Tests point `root` at a scratch folder
+    and `run` at a recorder, so nothing real is touched."""
+
+    def __init__(self, root="/", run=None):
+        self.root = root
+        self.run = run or self._run
+
+    def path(self, p):
+        return os.path.join(self.root, p.lstrip("/"))
+
+    @staticmethod
+    def _run(args, stdin=None, timeout=120):
+        done = subprocess.run(args, input=stdin, capture_output=True, text=True, timeout=timeout)
+        return done.returncode, done.stdout, done.stderr.strip()
+
+    def must(self, args, stdin=None, timeout=120):
+        code, out, err = self.run(args, stdin=stdin, timeout=timeout)
+        if code != 0:
+            raise Refused(f"{args[0]} failed: {err or out or code}")
+        return out
+
+    def have(self, program):
+        return shutil.which(program) is not None if self.root == "/" else True
+
+    # ----- small file helpers ------------------------------------------------
+
+    def write(self, p, text, mode=0o644):
+        full = self.path(p)
+        os.makedirs(os.path.dirname(full), exist_ok=True)
+        tmp = full + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as fh:
+            fh.write(text)
+        os.chmod(tmp, mode)
+        os.replace(tmp, full)
+
+    def read(self, p, default=""):
+        try:
+            with open(self.path(p), encoding="utf-8") as fh:
+                return fh.read()
+        except OSError:
+            return default
+
+    def state(self):
+        try:
+            return json.loads(self.read("/etc/doubletake/nas.json", "{}"))
+        except ValueError:
+            return {}
+
+    def save_state(self, data):
+        self.write("/etc/doubletake/nas.json", json.dumps(data, indent=2) + "\n")
+        # Readable by the screens (0.8.1 left the folder closed to them, which stopped the screens).
+        os.chmod(self.path("/etc/doubletake"), 0o755)
+
+
+# ----- configuration text ----------------------------------------------------------
+
+
+def samba_conf(library, owner, user):
+    share = ""
+    if user:
+        share = f"""
+[DoubleTake]
+   comment = DoubleTake photos (read-only)
+   path = {library}
+   read only = yes
+   browseable = yes
+   guest ok = no
+   valid users = {user}
+   force user = {owner}
+   vfs objects = fruit streams_xattr
+   fruit:metadata = stream
+"""
+    return f"""# Written by DoubleTake. Changes here are replaced by the app.
+[global]
+   mdns name = netbios
+   server min protocol = SMB2_10
+   fruit:model = MacSamba
+   load printers = no
+   printing = bsd
+   printcap name = /dev/null
+   disable spoolss = yes
+{share}"""
+
+
+def sshd_conf(user):
+    return f"""# Written by DoubleTake: read-only SFTP for the photos, and nothing else.
+Port {SFTP_PORT}
+HostKey /etc/ssh/ssh_host_ed25519_key
+HostKey /etc/ssh/ssh_host_ecdsa_key
+HostKey /etc/ssh/ssh_host_rsa_key
+PidFile /run/doubletake-sftp.pid
+AllowUsers {user or "doubletake-nobody"}
+PermitRootLogin no
+PasswordAuthentication yes
+KbdInteractiveAuthentication no
+UsePAM yes
+AllowTcpForwarding no
+AllowAgentForwarding no
+X11Forwarding no
+PermitTunnel no
+ChrootDirectory /srv/doubletake
+ForceCommand internal-sftp -R -d /Photos
+Subsystem sftp internal-sftp -R
+"""
+
+
+def mount_unit(library):
+    return f"""# Written by DoubleTake: the photos, read-only, inside the SFTP folder.
+[Unit]
+Description=DoubleTake photos for SFTP
+
+[Mount]
+What={library}
+Where=/srv/doubletake/Photos
+Type=none
+Options=bind,ro
+
+[Install]
+WantedBy=multi-user.target
+"""
+
+
+SFTP_UNIT = """# Written by DoubleTake.
+[Unit]
+Description=DoubleTake read-only SFTP
+After=network.target srv-doubletake-Photos.mount
+Requires=srv-doubletake-Photos.mount
+
+[Service]
+ExecStartPre=/usr/sbin/sshd -t -f /etc/ssh/doubletake_sftp_config
+ExecStart=/usr/sbin/sshd -D -e -f /etc/ssh/doubletake_sftp_config
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target
+"""
+
+STATUS_UNIT = """# Written by DoubleTake: tells the screens who is connected.
+[Unit]
+Description=DoubleTake NAS status
+After=smb.service
+
+[Service]
+ExecStart=@HELPER@ status-loop
+RuntimeDirectory=doubletake
+RuntimeDirectoryMode=0755
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+"""
+
+INCLUDE = "include = /etc/samba/doubletake.conf"
+SMB_CONF = "/etc/samba/smb.conf"
+SMB_ORIGINAL = "/etc/samba/smb.conf.before-doubletake"
+# Lines this helper wrote under its earlier names, recognised and replaced.
+OLD_LINES = ("include = /etc/samba/fieldstation.conf", "# Field Station", "# Field Photo Station", "# DoubleTake")
+# Shares Red Hat's Samba comes with: each person's home folder (shown under their
+# own name) and the printers. Only the photos should be seen, so these are switched off.
+DEFAULT_SHARES = ("homes", "printers", "print$")
+OFF = "#doubletake-off# "
+OLD_OFF = "#fieldstation-off# "
+
+
+def hide_default_shares(text):
+    """The main Samba file with the built-in shares commented out. Safe to run again."""
+    out, hiding = [], False
+    for line in text.splitlines():
+        bare = line.strip()
+        if bare.startswith("[") and "]" in bare:
+            hiding = bare[1:bare.index("]")].strip().lower() in DEFAULT_SHARES
+        if hiding and bare and not line.startswith(OFF):
+            line = OFF + line
+        out.append(line)
+    return "\n".join(out) + "\n"
+
+
+def show_default_shares(text):
+    def bare(line):
+        for mark in (OFF, OLD_OFF):
+            if line.startswith(mark):
+                return line[len(mark):]
+        return line
+    return "\n".join(bare(line) for line in text.splitlines()) + "\n"
+
+
+def tidy_samba(sysm):
+    """Pull in our file, and switch off the built-in shares. Keeps the original once.
+
+    Our include line goes last, after the built-in shares are switched off, so it is
+    never caught inside one of them. A file left by 0.5.2, where it was, is repaired.
+    """
+    main = sysm.read(SMB_CONF)
+    if main and not sysm.read(SMB_ORIGINAL):
+        sysm.write(SMB_ORIGINAL, main)
+    keep = [line for line in show_default_shares(main).splitlines()
+            if line.strip() not in (INCLUDE,) + OLD_LINES]
+    tidy = hide_default_shares("\n".join(keep).rstrip("\n") + "\n")
+    tidy = tidy.rstrip("\n") + "\n\n# DoubleTake\n" + INCLUDE + "\n"
+    if tidy != main:
+        sysm.write(SMB_CONF, tidy)
+        # Samba notices a changed file by itself, but only after a while.
+        sysm.run(["systemctl", "try-reload-or-restart", "smb.service"])
+
+
+# ----- the jobs ---------------------------------------------------------------------
+
+
+def invoking_user(env):
+    """The tablet's own user, who ran this through sudo (the screens, or doubletake setup)."""
+    name = env.get("SUDO_USER", "")
+    if not name or name == "root":
+        raise Refused("run through sudo by the tablet's own user")
+    return pwd.getpwnam(name)
+
+
+# The photos folder goes into Samba's and systemd's own files, written as root: only plain
+# characters, so a folder name can never add a line or a setting of its own to them.
+LIBRARY_RE = re.compile(r"^/[A-Za-z0-9 ._+@,/-]{1,250}$")
+
+
+def check_library(sysm, library, home):
+    if not isinstance(library, str) or not LIBRARY_RE.match(library) or "/-" in library or "//" in library:
+        raise Refused("the photos folder's path may only use letters, digits, spaces and . _ - + @ ,")
+    real = os.path.realpath(library)
+    if os.path.islink(library) or real != os.path.abspath(library):
+        raise Refused("the photos folder must not be a link")
+    if not (real + "/").startswith(home.rstrip("/") + "/") or real == home.rstrip("/"):
+        raise Refused("the photos folder must be inside your home folder")
+    if sysm.root == "/" and not os.path.isdir(real):
+        raise Refused("the photos folder does not exist yet")
+    if not LIBRARY_RE.match(real):
+        raise Refused("the photos folder's path may only use letters, digits, spaces and . _ - + @ ,")
+    return real
+
+
+def install(sysm, library, env):
+    owner = invoking_user(env)
+    library = check_library(sysm, library, owner.pw_dir)
+    state = sysm.state()
+    state.update({"owner": owner.pw_name, "library": library, "sftp_port": SFTP_PORT})
+    state.setdefault("user", "")
+    sysm.save_state(state)
+    done = []
+
+    # Samba: our own file, pulled in from the main one, and only our share.
+    tidy_samba(sysm)
+    sysm.write("/etc/samba/doubletake.conf", samba_conf(library, owner.pw_name, state["user"]))
+    done.append("samba")
+
+    # The firewall: the share and SFTP only on trusted networks and the hotspot.
+    if sysm.have("firewall-cmd"):
+        code, zones, _ = sysm.run(["firewall-cmd", "--get-zones"])
+        for zone in TRUSTED_ZONES:
+            if zone in zones.split():
+                for extra in ("--add-service=samba", "--add-service=mdns", f"--add-port={SFTP_PORT}/tcp"):
+                    sysm.run(["firewall-cmd", "--permanent", f"--zone={zone}", extra])
+        sysm.run(["firewall-cmd", "--reload"])
+        done.append("firewall")
+
+    # SELinux: let Samba read the photos (read-only), and sshd listen on the SFTP port.
+    if sysm.have("setsebool"):
+        sysm.run(["setsebool", "-P", "samba_export_all_ro", "on"], timeout=300)
+        done.append("selinux")
+    if sysm.have("semanage"):
+        code, _, _ = sysm.run(["semanage", "port", "-a", "-t", "ssh_port_t", "-p", "tcp", str(SFTP_PORT)])
+        if code != 0:
+            sysm.run(["semanage", "port", "-m", "-t", "ssh_port_t", "-p", "tcp", str(SFTP_PORT)])
+
+    # SFTP: a folder owned by root holding a read-only view of the photos.
+    for folder in ("/srv/doubletake", "/srv/doubletake/Photos"):
+        full = sysm.path(folder)
+        os.makedirs(full, exist_ok=True)
+        # Run again, the Photos folder is already the read-only view of the photos: leave it be.
+        if not os.path.ismount(full):
+            try:
+                os.chmod(full, 0o755)
+            except OSError as exc:
+                if exc.errno != errno.EROFS:
+                    raise
+    sysm.write("/etc/systemd/system/srv-doubletake-Photos.mount", mount_unit(library))
+    sysm.write("/etc/systemd/system/doubletake-sftp.service", SFTP_UNIT)
+    sysm.write("/etc/systemd/system/doubletake-nas-status.service", STATUS_UNIT.replace("@HELPER@", HELPER_PATH))
+    sysm.write("/etc/ssh/doubletake_sftp_config", sshd_conf(state["user"]), mode=0o600)
+    sysm.run(["systemctl", "daemon-reload"])
+    sysm.run(["systemctl", "enable", "--now", "srv-doubletake-Photos.mount"])
+    done.append("sftp")
+    if state.get("sftp"):
+        sysm.run(["systemctl", "enable", "--now", "doubletake-sftp.service"])
+    if state.get("nas") or state.get("sftp"):
+        sysm.run(["systemctl", "restart", "doubletake-nas-status.service"])  # the new version of it
+    status_service(sysm, state)
+    return {"ok": True, "done": done}
+
+
+def _apply_user(sysm, state, user):
+    sysm.write("/etc/samba/doubletake.conf", samba_conf(state["library"], state["owner"], user))
+    sysm.write("/etc/ssh/doubletake_sftp_config", sshd_conf(user), mode=0o600)
+    sysm.run(["smbcontrol", "smbd", "reload-config"])
+    code, out, _ = sysm.run(["systemctl", "is-active", "doubletake-sftp.service"])
+    if out.strip() == "active":
+        sysm.run(["systemctl", "restart", "doubletake-sftp.service"])
+
+
+def set_user(sysm, name, password):
+    state = sysm.state()
+    if not state.get("owner"):
+        raise Refused("the NAS is not set up yet; run setup.sh")
+    if not NAME_RE.match(name) or name in RESERVED or name == state["owner"]:
+        raise Refused("that name cannot be used for the share's login")
+    if not (8 <= len(password) <= 128) or "\n" in password or "\r" in password or ":" in password:
+        raise Refused("the password must be 8 to 128 characters, without a colon")
+    old = state.get("user", "")
+    try:
+        existing = pwd.getpwnam(name) if sysm.root == "/" else None
+    except KeyError:
+        existing = None
+    if existing is not None and name != old:
+        raise Refused("an account with that name already exists on the tablet")
+    if name != old:
+        # A login for the share only: no home folder, no shell.
+        sysm.must(["useradd", "--system", "--no-create-home", "--shell", "/sbin/nologin",
+                   "--comment", "DoubleTake share", name])
+    sysm.must(["chpasswd"], stdin=f"{name}:{password}\n")
+    sysm.must(["smbpasswd", "-s", "-a", name], stdin=f"{password}\n{password}\n")
+    if old and old != name:
+        _remove_user(sysm, old)
+    state["user"] = name
+    sysm.save_state(state)
+    _apply_user(sysm, state, name)
+    return {"ok": True, "user": name}
+
+
+def _remove_user(sysm, name):
+    """Remove a share login this helper made, and only one it made."""
+    try:
+        entry = pwd.getpwnam(name) if sysm.root == "/" else None
+    except KeyError:
+        return
+    if entry is not None and (entry.pw_uid >= 1000 or entry.pw_gecos not in ("DoubleTake share", "Field Station share", "Field Photo Station share")):
+        return
+    sysm.run(["smbpasswd", "-x", name])
+    sysm.run(["userdel", name])
+
+
+def switch(sysm, what, on):
+    state = sysm.state()
+    if not state.get("owner"):
+        raise Refused("the NAS is not set up yet; run setup.sh")
+    unit = {"nas": "smb.service", "sftp": "doubletake-sftp.service"}[what]
+    if on and not state.get("user"):
+        raise Refused("set the share's username and password first")
+    if on and what == "nas":
+        tidy_samba(sysm)
+    sysm.must(["systemctl", "enable" if on else "disable", "--now", unit])
+    if what == "nas":
+        sysm.run(["systemctl", "enable" if on else "disable", "--now", "nmb.service"])
+    state[what] = bool(on)
+    sysm.save_state(state)
+    status_service(sysm, state)
+    return {"ok": True}
+
+
+def status_service(sysm, state=None):
+    """The status writer runs while the share or SFTP is on, and starts again at boot.
+
+    0.5.x before 0.5.8 only started it when the NAS was switched on, so after a
+    restart the share came back but nobody was ever shown as connected.
+    """
+    state = sysm.state() if state is None else state
+    on = bool(state.get("nas") or state.get("sftp"))
+    sysm.run(["systemctl", "enable" if on else "disable", "--now", "doubletake-nas-status.service"])
+    return {"ok": True, "running": on}
+
+
+def zone(sysm, uuid, name, device=""):
+    if not UUID_RE.match(uuid) or name not in ("home", "public") or (device and not DEV_RE.match(device)):
+        raise Refused("bad network details")
+    code, kind, _ = sysm.run(["nmcli", "-g", "connection.type", "connection", "show", "uuid", uuid])
+    if code != 0 or kind.strip() not in ("802-11-wireless", "802-3-ethernet"):
+        raise Refused("only Wi-Fi and cable networks can be trusted or untrusted")
+    sysm.must(["nmcli", "connection", "modify", "uuid", uuid, "connection.zone", name])
+    if device and sysm.have("firewall-cmd"):
+        sysm.run(["firewall-cmd", f"--zone={name}", f"--change-interface={device}"])
+    return {"ok": True}
+
+
+def hotspot_zone(sysm, on):
+    if not sysm.have("firewall-cmd"):
+        return {"ok": True}
+    verb = "add" if on else "remove"
+    for extra in (f"--{verb}-service=samba", f"--{verb}-port={SFTP_PORT}/tcp"):
+        sysm.run(["firewall-cmd", "--permanent", "--zone=nm-shared", extra])
+    sysm.run(["firewall-cmd", "--reload"])
+    return {"ok": True}
+
+
+PHONE_PORT = 8780
+
+
+def phone_port(sysm, on, device):
+    """Open the phone download page's port on the hotspot only, until the next restart at most.
+
+    Not saved permanently: it is open only while a phone share is running.
+    """
+    if not DEV_RE.match(device or ""):
+        raise Refused("not a network device")
+    if not sysm.have("firewall-cmd"):
+        return {"ok": True}
+    code, zone, _ = sysm.run(["firewall-cmd", f"--get-zone-of-interface={device}"])
+    zone = zone.strip() if code == 0 and zone.strip() else "nm-shared"
+    if zone not in ("nm-shared", "home", "trusted"):
+        raise Refused("the hotspot is not in a trusted zone")
+    verb = "add" if on else "remove"
+    sysm.run(["firewall-cmd", f"--zone={zone}", f"--{verb}-port={PHONE_PORT}/tcp"])
+    return {"ok": True, "zone": zone}
+
+
+# DoubleTake's own mark on a card it uses, and the names used before 0.9.5.
+CAMERA_MARKERS = ("DoubleTake/.doubletake/card.json", "FieldPhotos/.fieldstation/card.json",
+                  "DoubleTake/.fieldstation/card.json", ".doubletake/card.json", ".fieldstation/card.json")
+
+
+def holds_camera_photos(sysm, where):
+    """A mounted card or drive that is a camera's card: a DCIM folder, and not DoubleTake's own.
+
+    A camera's card is never erased by DoubleTake, whatever the screens send.
+    """
+    root = sysm.path(where)
+    return os.path.isdir(os.path.join(root, "DCIM")) and not any(
+        os.path.isfile(os.path.join(root, m)) for m in CAMERA_MARKERS)
+
+
+def _sd_slot(sysm, disk):
+    """An mmcblk device is the card slot only when the card in it says it is an SD card; the
+    tablet's own built-in storage (eMMC) shows up as mmcblk too, and says MMC."""
+    return sysm.read(f"/sys/class/block/{disk}/device/type").strip() == "SD"
+
+
+def _same_device(sysm, name, dev):
+    """Still the same device as when it was checked (its kernel numbers), just before erasing."""
+    if sysm.read(f"/sys/class/block/{name}/dev").strip() != dev:
+        raise Refused("the drive changed while it was being checked; nothing was erased")
+
+
+def format_card(sysm, device, label):
+    if not CARD_RE.match(device) or not LABEL_RE.match(label):
+        raise Refused("that is not a card this app may format")
+    name = os.path.basename(device)
+    disk = re.sub(r"p?[0-9]+$", "", name)
+    block = sysm.path(f"/sys/class/block/{disk}")
+    if not os.path.isdir(block):
+        raise Refused("the card was not found")
+    if name.startswith("sd"):
+        removable = sysm.read(f"/sys/class/block/{disk}/removable").strip()
+        if removable != "1":
+            raise Refused("that drive is not a removable card")
+    elif not _sd_slot(sysm, disk):
+        raise Refused("that is the tablet's built-in storage, not a card")
+    dev = sysm.read(f"/sys/class/block/{name}/dev").strip()
+    # Never a drive the system runs from.
+    for line in sysm.read("/proc/self/mounts").splitlines():
+        parts = line.split()
+        if len(parts) >= 2 and parts[1] in ("/", "/boot", "/boot/efi", "/home", "/usr", "/var"):
+            if parts[0].startswith(f"/dev/{disk}"):
+                raise Refused("that drive holds the system")
+        if len(parts) >= 2 and parts[0].startswith(f"/dev/{disk}"):
+            if holds_camera_photos(sysm, parts[1].replace("\\040", " ")):
+                raise Refused("that is a camera's card: it holds a DCIM folder")
+    if not sysm.have("mkfs.exfat"):
+        raise Refused("the exFAT tools are not installed (exfatprogs); run setup.sh again")
+    sysm.run(["umount", device])
+    _same_device(sysm, name, dev)
+    sysm.must(["mkfs.exfat", "-L", label, device], timeout=600)
+    return {"ok": True}
+
+
+# ----- preparing a drive for DoubleTake ------------------------------------------------------
+#
+# Every drive used for the second copy, the microSD card in the tablet's slot or a USB drive,
+# belongs to DoubleTake alone: the whole drive is
+# erased and given one exFAT partition (readable on a Mac, Windows and Linux) with
+# DoubleTake's label. The screens ask three times and want AGREE typed before they ask for
+# this; here every argument is checked again, and the drive the system runs from, or the one
+# holding the photos, is never touched.
+
+DISK_RE = re.compile(r"^/dev/(mmcblk[0-9]+|sd[a-z]{1,2})$")
+SYSTEM_MOUNTS = ("/", "/boot", "/boot/efi", "/home", "/usr", "/var")
+BASIC_DATA = "EBD0A0A2-B9E5-4433-87C0-68B6B72699C7"
+
+
+def _partition(disk):
+    return disk + ("p1" if "mmcblk" in disk else "1")
+
+
+def prepare_drive(sysm, disk, label):
+    if not DISK_RE.match(disk) or not LABEL_RE.match(label):
+        raise Refused("that is not a drive this app may prepare")
+    name = os.path.basename(disk)
+    block = sysm.path(f"/sys/class/block/{name}")
+    if not os.path.isdir(block):
+        raise Refused("the drive was not found")
+    if name.startswith("sd"):
+        real = os.path.realpath(block) if sysm.root == "/" else sysm.read(f"/sys/class/block/{name}/.realpath").strip()
+        if "/usb" not in real:
+            raise Refused("that drive is not plugged in over USB")
+    elif not _sd_slot(sysm, name):
+        raise Refused("that is the tablet's built-in storage, not a card")
+    dev = sysm.read(f"/sys/class/block/{name}/dev").strip()
+    # Never the drive the system runs from, nor the one holding the photos.
+    library = sysm.state().get("library", "")
+    mounts = []
+    for line in sysm.read("/proc/self/mounts").splitlines():
+        parts = line.split()
+        if len(parts) >= 2 and re.match(rf"^/dev/{re.escape(name)}(p?[0-9]+)?$", parts[0]):
+            where = parts[1].replace("\\040", " ")
+            if where in SYSTEM_MOUNTS:
+                raise Refused("that drive holds the system")
+            if library and (library + "/").startswith(where.rstrip("/") + "/"):
+                raise Refused("that drive holds the photos")
+            if holds_camera_photos(sysm, where):
+                raise Refused("that is a camera's card: it holds a DCIM folder")
+            mounts.append(parts[0])
+    for tool in ("sfdisk", "wipefs", "mkfs.exfat"):
+        if not sysm.have(tool):
+            raise Refused(f"{tool} is not installed; run setup.sh again")
+    for part in sorted(set(mounts), reverse=True):
+        sysm.must(["umount", part], timeout=120)
+    _same_device(sysm, name, dev)
+    sysm.must(["wipefs", "-a", "-f", disk], timeout=120)
+    try:
+        sectors = int(sysm.read(f"/sys/class/block/{name}/size").strip() or 0)
+    except ValueError:
+        sectors = 0
+    # Up to 2 TiB, an MBR table, as cameras and card readers expect; bigger needs GPT.
+    script = (f"label: gpt\ntype={BASIC_DATA}\n" if sectors * 512 > 2 * 1024 ** 4
+              else "label: dos\ntype=7\n")
+    sysm.must(["sfdisk", "--wipe", "always", "--wipe-partitions", "always", disk], stdin=script, timeout=120)
+    sysm.run(["udevadm", "settle", "--timeout=20"], timeout=30)
+    part = _partition(disk)
+    for _ in range(20):  # the new partition shows up a moment after the table is written
+        if sysm.root != "/" or os.path.exists(part):
+            break
+        sysm.run(["partx", "-u", disk], timeout=30)
+        time.sleep(0.5)
+    sysm.must(["mkfs.exfat", "-L", label, part], timeout=900)
+    sysm.run(["udevadm", "settle", "--timeout=20"], timeout=30)
+    return {"ok": True, "partition": part}
+
+
+# ----- start at power-on ---------------------------------------------------------------
+
+GDM_CONF = "/etc/gdm/custom.conf"
+
+
+def gdm_autologin(text, user):
+    """The login screen's settings with automatic login for 'user', or with it removed (user None)."""
+    want = ["AutomaticLoginEnable=True", f"AutomaticLogin={user}"] if user else []
+    out, section, placed = [], "", False
+    for line in text.splitlines():
+        bare = line.strip()
+        if bare.startswith("[") and bare.endswith("]"):
+            section = bare[1:-1].strip().lower()
+            out.append(line)
+            if section == "daemon" and not placed:
+                out.extend(want)
+                placed = True
+            continue
+        if section == "daemon" and bare.split("=", 1)[0].strip() in ("AutomaticLoginEnable", "AutomaticLogin"):
+            continue
+        out.append(line)
+    if not placed and want:
+        out = ["[daemon]"] + want + ([""] if out else []) + out
+    return "\n".join(out).rstrip("\n") + "\n"
+
+
+def autologin(sysm, on, env):
+    """Log the tablet's own user in at power-on, with no password, or stop doing so."""
+    owner = sysm.state().get("owner") or invoking_user(env).pw_name
+    pwd.getpwnam(owner)  # must be a real user
+    current = sysm.read(GDM_CONF)
+    changed = gdm_autologin(current, owner if on else None)
+    if changed != current:
+        sysm.write(GDM_CONF, changed)
+    return {"ok": True}
+
+
+# ----- DoubleTake only (the kiosk session) ---------------------------------------------
+
+# Where the login screen's sessions are listed, and their type. Wayland first.
+SESSION_DIRS = (("/usr/share/wayland-sessions", "wayland"), ("/usr/share/xsessions", "x11"))
+# The kiosk session's file is gnome-kiosk-script.desktop on RHEL 9, and
+# gnome-kiosk-script-wayland.desktop or -xorg.desktop in other versions.
+KIOSK_PREFIX = "gnome-kiosk-script"
+DESKTOP_NAMES = ("gnome", "gnome-wayland", "gnome-xorg")
+SESSION_NAME_RE = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
+ACCOUNTS_DIR = "/var/lib/AccountsService/users"
+
+
+def _kiosk_session(sysm):
+    """The kiosk session's (name, type), Wayland first, or (None, None) when not installed."""
+    for folder, kind in SESSION_DIRS:
+        try:
+            names = sorted(os.listdir(sysm.path(folder)))
+        except OSError:
+            continue
+        for entry in names:
+            if entry.startswith(KIOSK_PREFIX) and entry.endswith(".desktop") and SESSION_NAME_RE.match(entry[:-8]):
+                return entry[:-8], kind
+    return None, None
+
+
+def _desktop_session(sysm):
+    for folder, kind in SESSION_DIRS:
+        for name in DESKTOP_NAMES:
+            if os.path.isfile(sysm.path(f"{folder}/{name}.desktop")):
+                return name, kind
+    return None, None
+
+
+def _session_file(sysm, owner):
+    """The user's saved session in AccountsService, as {key: value} under [User]."""
+    found, section = {}, ""
+    for line in sysm.read(f"{ACCOUNTS_DIR}/{owner}").splitlines():
+        bare = line.strip()
+        if bare.startswith("[") and bare.endswith("]"):
+            section = bare[1:-1]
+        elif section == "User" and "=" in bare and not bare.startswith("#"):
+            key, value = (x.strip() for x in bare.split("=", 1))
+            found[key] = value
+    return found
+
+
+def _write_session_file(sysm, owner, name, kind):
+    """Set Session, XSession and SessionType under [User], keeping every other line."""
+    path = f"{ACCOUNTS_DIR}/{owner}"
+    want = {"Session": name, "XSession": name, "SessionType": kind}
+    out, section, placed = [], "", False
+    for line in sysm.read(path).splitlines():
+        bare = line.strip()
+        if bare.startswith("[") and bare.endswith("]"):
+            if section == "User" and not placed:
+                out.extend(f"{k}={v}" for k, v in want.items())
+                placed = True
+            section = bare[1:-1]
+            out.append(line)
+            continue
+        if section == "User" and bare.split("=", 1)[0].strip() in want:
+            continue
+        out.append(line)
+    if not placed:
+        if section != "User":
+            if out and out[-1].strip():
+                out.append("")
+            out.append("[User]")
+        out.extend(f"{k}={v}" for k, v in want.items())
+    sysm.write(path, "\n".join(out).rstrip("\n") + "\n", mode=0o600)
+
+
+def _tell_accounts(sysm, uid, name, kind):
+    """Tell the accounts service, which the login screen asks. True when it took it."""
+    obj = f"/org/freedesktop/Accounts/User{uid}"
+    base = ["busctl", "call", "org.freedesktop.Accounts", obj, "org.freedesktop.Accounts.User"]
+    code, _, _ = sysm.run(base + ["SetSession", "s", name], timeout=20)
+    if code != 0:
+        code, _, _ = sysm.run(base + ["SetXSession", "s", name], timeout=20)
+    if code == 0:
+        sysm.run(base + ["SetSessionType", "s", kind], timeout=20)
+    return code == 0
+
+
+def session(sysm, mode, env):
+    """Log the tablet's own user in to DoubleTake only (kiosk), or to the desktop."""
+    owner = sysm.state().get("owner") or invoking_user(env).pw_name
+    account = pwd.getpwnam(owner)  # must be a real user
+    state = sysm.state()
+    before = _session_file(sysm, owner)
+    if mode == "kiosk":
+        name, kind = _kiosk_session(sysm)
+        if not name:
+            raise Refused("the kiosk session is not installed (dnf install gnome-kiosk-script-session)")
+        old = before.get("Session") or before.get("XSession") or ""
+        if old and "kiosk" not in old and SESSION_NAME_RE.match(old):
+            state["session_before"] = old
+            state["session_type_before"] = before.get("SessionType", "")
+    else:
+        name, kind = state.get("session_before", ""), state.get("session_type_before", "")
+        if not (name and SESSION_NAME_RE.match(name) and "kiosk" not in name):
+            name, kind = _desktop_session(sysm)
+        if not name:
+            name, kind = "gnome", "wayland"
+        kind = kind if kind in ("wayland", "x11") else ("x11" if name.endswith("xorg") else "wayland")
+        state.pop("session_before", None)
+        state.pop("session_type_before", None)
+    # The service is told first; the file is written as well, in case the service is older
+    # or not running, and the service is then asked to read it again.
+    told = _tell_accounts(sysm, account.pw_uid, name, kind)
+    _write_session_file(sysm, owner, name, kind)
+    if not told:
+        sysm.run(["systemctl", "try-restart", "accounts-daemon.service"], timeout=60)
+    state["session"] = "kiosk" if mode == "kiosk" else "desktop"
+    sysm.save_state(state)
+    return {"ok": True, "session": name}
+
+
+# ----- the boot screen ------------------------------------------------------------------
+
+SPLASH_DIR = "/usr/share/plymouth/themes/doubletake"
+SPLASH_NAME = "doubletake"
+THEME_RE = re.compile(r"^[A-Za-z0-9._-]{1,40}$")
+
+
+GRUB_DEFAULTS = "/etc/default/grub"
+GRUB_CFG = "/boot/grub2/grub.cfg"
+GRUB_KEYS = {"GRUB_TIMEOUT_STYLE": "hidden", "GRUB_TIMEOUT": "3"}  # 3 s to catch F8 or Esc
+GRUB_VALUE_RE = re.compile(r"^[A-Za-z0-9._\"'-]{0,20}$")
+
+
+def grub_settings(text, values):
+    """/etc/default/grub with these keys set (a value of None removes the key)."""
+    out, done = [], set()
+    for line in text.splitlines():
+        key = line.split("=", 1)[0].strip()
+        if key in values:
+            if key not in done and values[key] is not None:
+                out.append(f"{key}={values[key]}")
+            done.add(key)
+            continue
+        out.append(line)
+    out.extend(f"{k}={v}" for k, v in values.items() if k not in done and v is not None)
+    return "\n".join(out).rstrip("\n") + "\n"
+
+
+def _grub_now(text):
+    found = {}
+    for line in text.splitlines():
+        key, _, value = line.partition("=")
+        if key.strip() in GRUB_KEYS:
+            found[key.strip()] = value.strip()
+    return found
+
+
+QUIET_ARGS = "loglevel=3 rd.udev.log_level=3 vt.global_cursor_default=0"
+
+
+def quiet_messages(sysm, on, state):
+    """Keep start-up messages off the screen under the boot screen, or let them show again."""
+    if not sysm.have("grubby"):
+        return
+    if on and not state.get("quiet_args"):
+        sysm.must(["grubby", "--update-kernel=ALL", f"--args={QUIET_ARGS}"], timeout=120)
+        state["quiet_args"] = True
+    elif not on and state.pop("quiet_args", False):
+        sysm.must(["grubby", "--update-kernel=ALL", f"--remove-args={QUIET_ARGS}"], timeout=120)
+
+
+def quiet_boot(sysm, on, state):
+    """Hide the boot menu (it still shows while Esc or Shift is held), or put it back as it was."""
+    quiet_messages(sysm, on, state)
+    current = sysm.read(GRUB_DEFAULTS)
+    if not current or not os.path.isfile(sysm.path(GRUB_CFG)):
+        return False  # not a layout this knows; leave the boot menu alone
+    if on:
+        if "grub_before" not in state:
+            state["grub_before"] = {k: v for k, v in _grub_now(current).items() if GRUB_VALUE_RE.match(v)}
+        want = dict(GRUB_KEYS)
+    else:
+        before = state.pop("grub_before", None)
+        if before is None:
+            return False
+        want = {k: before.get(k) for k in GRUB_KEYS}
+    changed = grub_settings(current, want)
+    if changed != current:
+        sysm.write(GRUB_DEFAULTS, changed)
+        sysm.must(["grub2-mkconfig", "-o", GRUB_CFG], timeout=300)
+    return True
+
+
+KVER_RE = re.compile(r"^[A-Za-z0-9._+-]{1,80}$")
+
+# Intel graphics' power savings that make some screens flicker on Linux: Panel Self Refresh,
+# and the display's deep idle states (on the 7220 it took both). The only settings this
+# ever adds or takes away; nothing else on the kernel's line is touched.
+FLICKER_ARGS = ("i915.enable_psr=0", "i915.enable_dc=0")
+
+
+def flicker_status(sysm):
+    """Is the flicker fix on? 'intel': the tablet has Intel graphics (the only kind it is
+    for); 'set': in the boot settings; 'active': in the kernel running now."""
+    intel = os.path.isdir(sysm.path("/sys/module/i915"))
+    code, out, _ = sysm.run(["grubby", "--info=DEFAULT"], timeout=30) if sysm.have("grubby") else (1, "", "")
+    args = ""
+    for line in out.splitlines() if code == 0 else []:
+        if line.startswith("args="):
+            args = line[len("args="):].strip().strip('"')
+    running = (sysm.read("/proc/cmdline") or "").split()
+    words = args.split()
+    return {"ok": True, "intel": intel, "set": all(a in words for a in FLICKER_ARGS),
+            "active": all(a in running for a in FLICKER_ARGS), "grubby": sysm.have("grubby")}
+
+
+def flicker(sysm, on):
+    """Switch the flicker fix on or off for every kernel, the maintenance entry included.
+    Takes effect at the next start."""
+    if not sysm.have("grubby"):
+        raise Refused("this system has no grubby; nothing was changed")
+    if on and not os.path.isdir(sysm.path("/sys/module/i915")):
+        raise Refused("this tablet does not have Intel graphics, so the fix is not for it")
+    flag = ("--args=" if on else "--remove-args=") + " ".join(FLICKER_ARGS)
+    sysm.must(["grubby", "--update-kernel=ALL", flag], timeout=120)
+    if sysm.state().get("boot_entry"):
+        boot_entry(sysm, True)  # the maintenance entry follows the usual one
+    result = flicker_status(sysm)
+    result["restart"] = result["set"] != result["active"]
+    return result
+
+
+def _boot_kernels(sysm):
+    """The kernel the tablet boots by default, and the one running now (once each)."""
+    found = []
+    code, out, _ = sysm.run(["grubby", "--default-kernel"], timeout=30)
+    if code == 0 and out.strip().startswith("/boot/vmlinuz-"):
+        found.append(out.strip()[len("/boot/vmlinuz-"):])
+    code, out, _ = sysm.run(["uname", "-r"], timeout=10)
+    if code == 0:
+        found.append(out.strip())
+    return [k for i, k in enumerate(found) if k and KVER_RE.match(k) and k not in found[:i]]
+
+
+def _initrd_theme(sysm, image):
+    """The boot screen theme a start-up image holds, or None when it cannot be told."""
+    code, out, _ = sysm.run(["lsinitrd", "-f", "etc/plymouth/plymouthd.conf", image], timeout=120)
+    if code != 0:
+        return None
+    for line in out.splitlines():
+        key, _, value = line.partition("=")
+        if key.strip() == "Theme":
+            return value.strip()
+    return ""
+
+
+SCRIPT_PLUGINS = ("/usr/lib64/plymouth/script.so", "/usr/lib/plymouth/script.so")
+
+
+def full_boot_screen(sysm):
+    """The logo turning from black and white to colour needs Plymouth's script plugin. When it
+    is there and the still fallback is in use (the plugin came after the package), switch to
+    the full one. Returns True when the theme file was changed."""
+    if not any(os.path.isfile(sysm.path(p)) for p in SCRIPT_PLUGINS):
+        return False
+    full = sysm.read(f"{SPLASH_DIR}/{SPLASH_NAME}-script.plymouth")
+    if not full or sysm.read(f"{SPLASH_DIR}/{SPLASH_NAME}.plymouth") == full:
+        return False
+    sysm.write(f"{SPLASH_DIR}/{SPLASH_NAME}.plymouth", full)
+    return True
+
+
+def splash(sysm, on, force=False):
+    """Show the DoubleTake logo while the tablet starts (a Plymouth theme), or put back the one before."""
+    if not sysm.have("plymouth-set-default-theme"):
+        raise Refused("the boot screen tool (plymouth) is not installed")
+    state = sysm.state()
+    code, out, _ = sysm.run(["plymouth-set-default-theme"], timeout=30)
+    current = out.strip() if code == 0 else ""
+    if on:
+        if not os.path.isfile(sysm.path(f"{SPLASH_DIR}/{SPLASH_NAME}.plymouth")):
+            raise Refused("the DoubleTake boot screen is not installed; run setup.sh again")
+        if current and current != SPLASH_NAME and THEME_RE.match(current):
+            state["splash_before"] = current
+        want = SPLASH_NAME
+    else:
+        want = state.get("splash_before") or "bgrt"
+        if not THEME_RE.match(want) or want == SPLASH_NAME:
+            want = "bgrt"
+    if on:
+        _, renamed = write_script(sysm)
+        if renamed or full_boot_screen(sysm):
+            force = True
+    if current != want:
+        sysm.must(["plymouth-set-default-theme", want], timeout=60)
+    # The start-up image of each kernel that boots must carry the theme, or the screen
+    # falls back to the system's own. Rebuild it for the default kernel and the running
+    # one, whenever it does not hold the right theme yet (an earlier rebuild may have
+    # been cut short), and check the result.
+    for kver in _boot_kernels(sysm):
+        image = f"/boot/initramfs-{kver}.img"
+        if _initrd_theme(sysm, image) == want and not force:
+            text = (sysm.read(f"{SPLASH_DIR}/{SPLASH_NAME}.script") or "") if on else ""
+            if not EDITION_LINE.search(text) or _initrd_edition(sysm, image) in (_boot_lines(text), None):
+                continue  # the right boot screen, with this tablet's line
+        sysm.must(["dracut", "-f", image, kver], timeout=900)
+        if _initrd_theme(sysm, image) not in (want, None):
+            raise Refused(f"the start-up image for {kver} still does not hold the {want} boot screen")
+    quiet_boot(sysm, on, state)
+    state["splash"] = bool(on)
+    if not on:
+        state.pop("splash_before", None)
+    sysm.save_state(state)
+    return {"ok": True, "theme": want}
+
+
+# ----- the shutdown fade, timed to this tablet ---------------------------------------------
+#
+# Plymouth times start-ups itself, but not shutdowns. Each start, this reads from the system
+# log how long the last shutdown took (from "powering down" or "rebooting" to the last line
+# written), and sets the boot screen's fade back to black and white to finish in about that
+# time, kept between 1 and 8 seconds. The shutdown screen is read from the main drive, so no
+# start-up image is rebuilt.
+
+SHUTDOWN_MARKS = ("System is powering down", "System is rebooting", "System is halting",
+                  "Reached target System Shutdown", "Reached target System Reboot",
+                  "Reached target Power-Off", "Reached target Reboot", "Reached target Shutdown")
+FADE_LINE = re.compile(r"^shutdown_fade = [0-9]+;.*$", re.M)
+EDITION_LINE = re.compile(r'^edition = "[a-z-]*";.*$', re.M)
+# Editions of the boot screen, switched on and off by hand (doubletake tron on|off): the
+# picture files' ending. Kept in the helper's state, so renames and upgrades leave it be.
+EDITIONS = {"tron": "-tron"}  # TWO REPLICAS OF NEGATIVES in place of FIELD STATION
+
+
+SPLASH_TEMPLATE = f"{SPLASH_DIR}/{SPLASH_NAME}-template.script"
+
+
+def splash_edition(sysm, text):
+    """The boot screen with the edition switched on, if any. Returns (new script text, changed)."""
+    want = EDITIONS.get(sysm.state().get("edition") or "", "")
+    if want and not os.path.isfile(sysm.path(f"{SPLASH_DIR}/wordmark{want}.png")):
+        want = ""
+    changed = EDITION_LINE.sub(f'edition = "{want}";  # doubletake-helper splash tune', text, count=1)
+    return changed, changed != text
+
+
+def last_shutdown_seconds(journal_text):
+    """How long the previous shutdown took, from 'journalctl -b -1 -o short-unix', or None."""
+    start = end = None
+    for line in journal_text.splitlines():
+        stamp, _, message = line.partition(" ")
+        try:
+            when = float(stamp)
+        except ValueError:
+            continue
+        end = when
+        if start is None and any(mark in message for mark in SHUTDOWN_MARKS):
+            start = when
+    if start is None or end is None or end <= start:
+        return None
+    return end - start
+
+
+# ----- the firmware's own logo (the BGRT table), for a seamless hand-off ---------------------
+#
+# UEFI firmware says where it drew its logo (the Dell logo on the 7220) and leaves the picture
+# for the system: /sys/firmware/acpi/bgrt. The boot screen shows that picture in the same
+# place, then fades it into DoubleTake's ring and icon, centred where it was and the same size.
+# Without it (a VM, older firmware), the boot screen is centred as before.
+
+BGRT_DIR = "/sys/firmware/acpi/bgrt"
+BGRT_LINE = re.compile(r"^bgrt_x = -?[0-9]+; bgrt_y = -?[0-9]+; bgrt_w = [0-9]+; bgrt_h = [0-9]+;.*$", re.M)
+FIRMWARE_PNG = "firmware.png"
+
+
+def bmp_to_png(data, trim=False):
+    """An uncompressed 24- or 32-bit BMP (what firmware leaves) as PNG bytes, or None.
+    With trim: (png, left, top) with the black margin round the logo cut away, so the
+    picture is the logo itself, and where that cut started."""
+    if len(data) < 54 or data[:2] != b"BM":
+        return None
+    offset = struct.unpack_from("<I", data, 10)[0]
+    width, height = struct.unpack_from("<ii", data, 18)
+    bpp, compression = struct.unpack_from("<HI", data, 28)
+    if bpp not in (24, 32) or compression not in (0, 3) or not 0 < width <= 4096 or not 0 < abs(height) <= 4096:
+        return None
+    step = bpp // 8
+    stride = (width * step + 3) & ~3
+    if offset + stride * abs(height) > len(data):
+        return None
+    pixels = []
+    for y in range(abs(height)):
+        src = (abs(height) - 1 - y) if height > 0 else y  # BMP rows run bottom-up
+        line = data[offset + src * stride: offset + src * stride + width * step]
+        pixels.append([(line[x * step + 2], line[x * step + 1], line[x * step]) for x in range(width)])
+    left, top, right, bottom = 0, 0, width, abs(height)
+    if trim:
+        lit = [(x, y) for y, row in enumerate(pixels) for x, p in enumerate(row) if max(p) > 32]
+        if lit:
+            left, right = min(x for x, _ in lit), max(x for x, _ in lit) + 1
+            top, bottom = min(y for _, y in lit), max(y for _, y in lit) + 1
+    rows = []
+    for row in pixels[top:bottom]:
+        out = bytearray(b"\x00")  # PNG filter: none
+        for r, g, b in row[left:right]:
+            out += bytes((r, g, b, 255))
+        rows.append(bytes(out))
+    width, height = right - left, bottom - top
+
+    def chunk(kind, body):
+        return struct.pack(">I", len(body)) + kind + body + struct.pack(">I", zlib.crc32(kind + body) & 0xFFFFFFFF)
+
+    png = (b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 8, 6, 0, 0, 0))
+           + chunk(b"IDAT", zlib.compress(b"".join(rows), 9)) + chunk(b"IEND", b""))
+    return (png, left, top) if trim else png
+
+
+def firmware_logo(sysm):
+    """(x, y, w, h) of the firmware's logo, with its picture saved beside the boot screen, or
+    None when the firmware says nothing (or nothing usable)."""
+    status = sysm.read(f"{BGRT_DIR}/status").strip()
+    if status != "1":
+        return None
+    try:
+        x = int(sysm.read(f"{BGRT_DIR}/xoffset").strip())
+        y = int(sysm.read(f"{BGRT_DIR}/yoffset").strip())
+        with open(sysm.path(f"{BGRT_DIR}/image"), "rb") as fh:
+            data = fh.read(64 * 1024 * 1024)
+    except (OSError, ValueError):
+        return None
+    got = bmp_to_png(data, trim=True)  # the logo itself, not the black round it
+    if got is None:
+        return None
+    png, left, top = got
+    x, y = x + left, y + top
+    w, h = struct.unpack_from(">II", png, 16)
+    target = sysm.path(f"{SPLASH_DIR}/{FIRMWARE_PNG}")
+    try:
+        with open(target, "rb") as fh:
+            same = fh.read() == png
+    except OSError:
+        same = False
+    if not same:
+        os.makedirs(os.path.dirname(target), exist_ok=True)
+        with open(target, "wb") as fh:
+            fh.write(png)
+    return x, y, w, h
+
+
+def write_script(sysm):
+    """The boot screen's script for this tablet, from the one shipped (the template): the
+    line for its name, and the shutdown fade timed to it. Returns (text, the line changed)."""
+    script = f"{SPLASH_DIR}/{SPLASH_NAME}.script"
+    current = sysm.read(script)
+    base = sysm.read(SPLASH_TEMPLATE) or current
+    if not base or not EDITION_LINE.search(base):
+        return current, False
+    text, _ = splash_edition(sysm, base)
+    if BGRT_LINE.search(text):
+        x, y, w, h = firmware_logo(sysm) or (0, 0, 0, 0)
+        text = BGRT_LINE.sub(f"bgrt_x = {x}; bgrt_y = {y}; bgrt_w = {w}; bgrt_h = {h};  # doubletake-helper splash tune",
+                             text, count=1)
+    ticks = sysm.state().get("shutdown_fade")
+    if isinstance(ticks, int) and 50 <= ticks <= 400 and FADE_LINE.search(text):
+        text = FADE_LINE.sub(f"shutdown_fade = {ticks};  # ticks; doubletake-helper splash tune", text, count=1)
+    if text != current:
+        sysm.write(script, text)
+    return text, _boot_lines(current or "") != _boot_lines(text)
+
+
+def _boot_lines(text):
+    """The lines a start-up image must carry for this tablet: the edition, and where the
+    firmware's logo was (none, when the script has no such line, is the same as no logo)."""
+    edition = EDITION_LINE.search(text)
+    bgrt = BGRT_LINE.search(text)
+    plain = "bgrt_x = 0; bgrt_y = 0; bgrt_w = 0; bgrt_h = 0;"
+    return (edition.group(0) if edition else None,
+            bgrt.group(0).split("#")[0].strip() if bgrt else plain)
+
+
+def _initrd_edition(sysm, image):
+    """The boot screen lines the start-up image carries (see _boot_lines), or None when it
+    cannot be read."""
+    code, out, _ = sysm.run(["lsinitrd", "-f", f"{SPLASH_DIR.lstrip('/')}/{SPLASH_NAME}.script", image], timeout=120)
+    if code != 0 or not out or not EDITION_LINE.search(out):
+        return None
+    return _boot_lines(out)
+
+
+def edition(sysm, name):
+    """Switch an edition on ('tron') or off (''): the script, then each start-up image, here
+    and now, so a restart afterwards shows it."""
+    state = sysm.state()
+    if name:
+        state["edition"] = name
+    else:
+        state.pop("edition", None)
+    sysm.save_state(state)
+    text, _ = write_script(sysm)
+    want = EDITION_LINE.search(text or "")
+    rebuilt = []
+    if want and state.get("splash"):
+        for kver in _boot_kernels(sysm):
+            image = f"/boot/initramfs-{kver}.img"
+            if _initrd_edition(sysm, image) != _boot_lines(text):
+                sysm.must(["dracut", "-f", image, kver], timeout=900)
+                rebuilt.append(kver)
+    return {"ok": True, "edition": name, "splash": bool(state.get("splash")), "rebuilt": rebuilt}
+
+
+def splash_tune(sysm):
+    # The edition switched on (if any) decides the line under DoubleTAKE. It is written to
+    # the script and, with the boot screen on, into each start-up image that does not carry
+    # it yet (a few minutes). Checked against the images themselves, so a rebuild cut short
+    # by a restart is done again next time.
+    text, renamed = write_script(sysm)
+    if full_boot_screen(sysm):
+        renamed = True  # the still fallback swapped for the full boot screen: rebuild
+    want = EDITION_LINE.search(text or "")
+    if want and sysm.state().get("splash"):
+        for kver in _boot_kernels(sysm):
+            image = f"/boot/initramfs-{kver}.img"
+            if renamed or _initrd_edition(sysm, image) not in (_boot_lines(text), None):
+                sysm.must(["dracut", "-f", image, kver], timeout=900)
+    script = f"{SPLASH_DIR}/{SPLASH_NAME}.script"
+    if not text or not FADE_LINE.search(text):
+        return {"ok": True, "skipped": True}
+    code, out, _ = sysm.run(["journalctl", "-b", "-1", "-o", "short-unix", "--no-pager", "-q"], timeout=60)
+    seconds = last_shutdown_seconds(out) if code == 0 else None
+    if seconds is None:
+        return {"ok": True, "skipped": True}
+    fade = max(1.0, min(8.0, seconds * 0.8 - 0.3))  # finish a little before the screen goes off
+    ticks = int(round(fade * 50))
+    changed = FADE_LINE.sub(f"shutdown_fade = {ticks};  # ticks; doubletake-helper splash tune", text, count=1)
+    if changed != text:
+        sysm.write(script, changed)
+    state = sysm.state()
+    if state.get("shutdown_fade") != ticks:
+        state["shutdown_fade"] = ticks  # kept, so the script written again after an upgrade keeps it
+        sysm.save_state(state)
+    return {"ok": True, "shutdown_seconds": round(seconds, 1), "fade_seconds": round(fade, 1)}
+
+
+# ----- the DoubleTake password ----------------------------------------------------------
+#
+# It guards Maintenance mode, Exit, switching DoubleTake only off, and the jobs that
+# cannot be undone. Only a slow, salted hash is kept, in a file only root can read. Wrong
+# tries are counted on disk, so restarting does not reset them.
+
+PW_FILE = "/etc/doubletake/password.json"
+TRIES_FILE = "/etc/doubletake/password-tries.json"
+PW_MIN = 10
+FREE_TRIES = 5
+SCRYPT = {"n": 2 ** 14, "r": 8, "p": 1}
+COMMON = {
+    "password", "password1", "password12", "password123", "password1234", "passw0rd123",
+    "1234567890", "12345678910", "0123456789", "qwertyuiop", "qwertyuiop1", "1q2w3e4r5t",
+    "asdfghjkl1", "iloveyou12", "letmein123", "welcome123", "admin12345", "administrator",
+    "abc1234567", "abcdefghij", "changeme12", "doubletake", "double take", "doubletake1",
+    "fieldstation", "field station", "fieldstation1", "fieldstation123", "doubletake12",
+    "doubletake123", "photography", "photographer", "nikonnikon", "canoncanon", "trustno1!!",
+    "football123", "baseball123", "superman123", "dragon1234", "monkey1234", "sunshine12",
+    "princess12", "starwars12", "whatever12", "11111111111", "aaaaaaaaaa", "qwerty12345",
+}
+
+
+def password_problem(password):
+    """Why a new DoubleTake password is too weak, or ''."""
+    if len(password) < PW_MIN:
+        return f"use at least {PW_MIN} characters; a few words with spaces works well"
+    if len(password) > 128:
+        return "use at most 128 characters"
+    if password.lower() in COMMON or password.lower().rstrip("!1") in COMMON:
+        return "that password is too common"
+    if len(set(password.lower())) < 5:
+        return "use more different characters"
+    if password.isdigit():
+        return "use letters too, not only numbers"
+    return ""
+
+
+def _pw_hash(password, salt):
+    return hashlib.scrypt(password.encode("utf-8"), salt=salt, dklen=32, maxmem=64 * 1024 * 1024, **SCRYPT).hex()
+
+
+def _pw_record(sysm):
+    try:
+        return json.loads(sysm.read(PW_FILE, "{}"))
+    except ValueError:
+        return {}
+
+
+def _tries(sysm):
+    try:
+        data = json.loads(sysm.read(TRIES_FILE, "{}"))
+        return int(data.get("count", 0)), float(data.get("last", 0))
+    except (ValueError, TypeError):
+        return 0, 0.0
+
+
+def _wait_left(count, last, now):
+    """Seconds to wait before the next try: none for the first five, then 30 s doubling, at most 15 min."""
+    if count < FREE_TRIES:
+        return 0
+    wait = min(30 * 2 ** (count - FREE_TRIES), 900)
+    return max(0, int(last + wait - now))
+
+
+def _pw_status(sysm, now):
+    record = _pw_record(sysm)
+    mode = record.get("mode") if record.get("mode") in ("password", "none") else "unset"
+    count, last = _tries(sysm)
+    return {"ok": True, "mode": mode, "wait": _wait_left(count, last, now) if mode == "password" else 0}
+
+
+def _check(sysm, password, now):
+    """True when the password is right, or none is set. Counts wrong tries."""
+    record = _pw_record(sysm)
+    if record.get("mode") != "password":
+        return True, 0
+    count, last = _tries(sysm)
+    wait = _wait_left(count, last, now)
+    if wait:
+        return False, wait
+    try:
+        salt = bytes.fromhex(record["salt"])
+        good = hmac.compare_digest(_pw_hash(password, salt), record["hash"])
+    except (KeyError, ValueError):
+        good = False
+    if good:
+        sysm.write(TRIES_FILE, json.dumps({"count": 0, "last": 0}) + "\n", mode=0o600)
+        return True, 0
+    count += 1
+    sysm.write(TRIES_FILE, json.dumps({"count": count, "last": now}) + "\n", mode=0o600)
+    return False, _wait_left(count, now, now)
+
+
+def fs_password(sysm, action, stdin, env, now=None):
+    now = time.time() if now is None else now
+    lines = (stdin or "").split("\n")
+    if action == "status":
+        return _pw_status(sysm, now)
+    if action == "check":
+        good, wait = _check(sysm, lines[0], now)
+        if good:
+            return {"ok": True}
+        return {"ok": False, "wait": wait,
+                "error": f"wrong password; wait {wait} seconds before trying again" if wait else "wrong password"}
+    if action in ("set", "none"):
+        # Changing it needs the current one, when there is one.
+        if _pw_record(sysm).get("mode") == "password":
+            good, wait = _check(sysm, lines[0], now)
+            if not good:
+                return {"ok": False, "wait": wait, "error": "the current password is wrong"}
+            lines = lines[1:]
+        if action == "none":
+            sysm.write(PW_FILE, json.dumps({"mode": "none", "since": int(now)}) + "\n", mode=0o600)
+            return {"ok": True, "mode": "none"}
+        new = lines[0] if lines else ""
+        problem = password_problem(new)
+        if problem:
+            raise Refused(problem)
+        salt = os.urandom(16)
+        sysm.write(PW_FILE, json.dumps({"mode": "password", "salt": salt.hex(), "hash": _pw_hash(new, salt),
+                                        "scrypt": SCRYPT, "since": int(now)}) + "\n", mode=0o600)
+        sysm.write(TRIES_FILE, json.dumps({"count": 0, "last": 0}) + "\n", mode=0o600)
+        return {"ok": True, "mode": "password"}
+    if action == "clear":
+        # The way back from a forgotten password: only from a root shell (sudo -i, which asks
+        # for the tablet's own password), never through the rule that lets the screens run this.
+        if str(env.get("SUDO_COMMAND", "")).startswith(HELPER_PATHS):
+            raise Refused("clear the DoubleTake password from a root shell: sudo -i, then "
+                          "doubletake-helper fs-password clear")
+        for path in (PW_FILE, TRIES_FILE):
+            try:
+                os.remove(sysm.path(path))
+            except FileNotFoundError:
+                pass
+        return {"ok": True, "mode": "unset"}
+    raise Refused("unknown password job")
+
+
+def reset(sysm):
+    state = sysm.state()
+    for unit in ("smb.service", "nmb.service", "doubletake-sftp.service", "doubletake-nas-status.service"):
+        sysm.run(["systemctl", "disable", "--now", unit])
+    if state.get("user"):
+        _remove_user(sysm, state["user"])
+    gdm = sysm.read(GDM_CONF)
+    if gdm and "AutomaticLogin" in gdm:
+        sysm.write(GDM_CONF, gdm_autologin(gdm, None))
+    if state.get("splash"):
+        try:
+            splash(sysm, False)
+        except (Refused, OSError):
+            pass
+        state = sysm.state()
+    if state.get("session") == "kiosk":
+        try:
+            session(sysm, "desktop", {})
+        except (Refused, KeyError):
+            pass
+        state = sysm.state()
+    if sysm.state().get("boot_entry") or os.path.exists(sysm.path(GRUB_SCRIPT)):
+        try:
+            boot_entry(sysm, False)
+        except (Refused, OSError):
+            pass
+        state = sysm.state()
+    main = sysm.read(SMB_CONF)
+    if OFF in main:
+        sysm.write(SMB_CONF, show_default_shares(main))
+    if state:
+        state.update({"user": "", "nas": False, "sftp": False})
+        sysm.save_state(state)
+        _apply_user(sysm, state, "")
+    return {"ok": True}
+
+
+# ----- a maintenance visit from the boot menu ----------------------------------------------
+#
+# If the screens ever stop answering, there has to be a way to the desktop that does not need
+# them. The boot menu (F8 or Esc at power-on) has an entry for one visit to the desktop. It is
+# a copy of the usual Red Hat entry (a Boot Loader Specification file in /boot/loader/entries)
+# with one word added to the kernel's command line, doubletake.maintenance=1, so it starts
+# Linux exactly as the usual entry does. Before the login screen starts, boot-check sees the
+# word, switches this one login to the desktop and turns automatic login off for it, so the
+# login screen asks for the tablet's own password. The visit then runs like one asked for from
+# the screens, and the next start is DoubleTake again.
+#
+# 0.8.3 used a hand-written menu entry that reloaded the menu; on the 5175 that restarted the
+# tablet into its firmware setup. That entry is removed by boot-entry on and off.
+
+ENTRIES_DIR = "/boot/loader/entries"
+ENTRY_FILE = "doubletake-maintenance.conf"
+ENTRY_TITLE = "DoubleTake maintenance (desktop)"
+MAINT_ARG = "doubletake.maintenance=1"
+BLS_KEY_RE = re.compile(r"^(title|version|linux|initrd|options|id|grub_users|grub_arg|grub_class|devicetree|architecture|machine-id|sort-key)$")
+GRUB_SCRIPT = "/etc/grub.d/42_doubletake"   # 0.8.3's entry, removed
+BOOT_UNIT_NAME = "doubletake-boot.service"
+BOOT_UNIT = """# Written by DoubleTake: a maintenance visit chosen in the boot menu.
+[Unit]
+Description=DoubleTake maintenance visit from the boot menu
+After=local-fs.target
+Before=display-manager.service systemd-user-sessions.service
+
+[Service]
+Type=oneshot
+ExecStart=@HELPER@ boot-check
+
+[Install]
+WantedBy=graphical.target
+"""
+
+
+def write_grub_cfg(sysm):
+    """Rebuild the boot menu, but only put it in place once GRUB itself has checked it."""
+    target = sysm.path(GRUB_CFG)
+    if not os.path.isfile(target):
+        raise Refused("this tablet's boot menu is not where this helper expects it; nothing was changed")
+    trial = GRUB_CFG + ".doubletake-new"
+    sysm.must(["grub2-mkconfig", "-o", trial], timeout=300)
+    if sysm.have("grub2-script-check"):
+        code, out, err = sysm.run(["grub2-script-check", trial], timeout=60)
+        if code != 0:
+            try:
+                os.remove(sysm.path(trial))
+            except OSError:
+                pass
+            raise Refused(f"the new boot menu did not pass GRUB's own check, so it was not used: {err or out}")
+    backup = sysm.path(GRUB_CFG + ".before-doubletake")
+    if not os.path.exists(backup):
+        shutil.copy2(target, backup)
+    os.replace(sysm.path(trial), target)
+
+
+def _remove_old_script(sysm):
+    if os.path.exists(sysm.path(GRUB_SCRIPT)):
+        os.remove(sysm.path(GRUB_SCRIPT))
+        write_grub_cfg(sysm)
+
+
+def parse_bls(text):
+    fields = []
+    for line in text.splitlines():
+        bare = line.strip()
+        if not bare or bare.startswith("#"):
+            continue
+        key, _, value = bare.partition(" ")
+        fields.append((key, value.strip()))
+    return fields
+
+
+def _default_entry(sysm):
+    """The usual entry's file: the one for the kernel the tablet boots by default."""
+    code, out, _ = sysm.run(["grubby", "--default-kernel"], timeout=60)
+    kernel = out.strip() if code == 0 else ""
+    if not kernel.startswith("/boot/vmlinuz-") or not KVER_RE.match(kernel[len("/boot/vmlinuz-"):]):
+        raise Refused("could not tell which kernel the tablet starts")
+    folder = sysm.path(ENTRIES_DIR)
+    if not os.path.isdir(folder):
+        raise Refused("this tablet has no boot entries folder; nothing was changed")
+    want = "vmlinuz-" + kernel[len("/boot/vmlinuz-"):]
+    for name in sorted(os.listdir(folder)):
+        if not name.endswith(".conf") or name == ENTRY_FILE:
+            continue
+        fields = parse_bls(sysm.read(f"{ENTRIES_DIR}/{name}"))
+        linux = dict(fields).get("linux", "")
+        if linux.rsplit("/", 1)[-1] == want and "rescue" not in name:
+            return name, fields
+    raise Refused("could not find the usual boot entry for the default kernel")
+
+
+def maintenance_entry(fields):
+    """The usual entry's fields as the maintenance entry: same kernel, one word more."""
+    out, has_options = [], False
+    for key, value in fields:
+        if not BLS_KEY_RE.match(key) or "\n" in value:
+            raise Refused(f"the usual boot entry has something this helper does not know: {key}")
+        if key == "title":
+            value = ENTRY_TITLE
+        elif key == "id":
+            continue  # its own, from the file name
+        elif key == "options":
+            words = [w for w in value.split() if w != MAINT_ARG]
+            value = " ".join(words + [MAINT_ARG])
+            has_options = True
+        out.append((key, value))
+    if not has_options:
+        out.append(("options", MAINT_ARG))
+    if not any(k == "linux" for k, _ in out):
+        raise Refused("the usual boot entry names no kernel")
+    return "# Written by DoubleTake: one maintenance visit to the desktop. Removed by its reset.\n" + \
+        "".join(f"{k} {v}\n" for k, v in out)
+
+
+def keep_usual_default(sysm, usual_id):
+    """Make sure the boot menu starts the usual entry by default, never the maintenance one.
+
+    GRUB keeps its default in a small file of its own (grubenv). If that file is damaged
+    (a virtual machine switched off hard, say), GRUB starts whichever entry comes first,
+    which could be the maintenance entry. So the usual one is named as the default here,
+    and a damaged file is made anew first.
+    """
+    if not sysm.have("grub2-editenv"):
+        return
+    code, out, _ = sysm.run(["grub2-editenv", "list"], timeout=30)
+    if code != 0:
+        sysm.run(["grub2-editenv", "create"], timeout=30)
+        out = ""
+    current = dict(line.split("=", 1) for line in out.splitlines() if "=" in line).get("saved_entry", "")
+    if current != usual_id:
+        sysm.run(["grub2-editenv", "-", "set", f"saved_entry={usual_id}"], timeout=30)
+
+
+def boot_entry(sysm, on):
+    unit = sysm.path(f"/etc/systemd/system/{BOOT_UNIT_NAME}")
+    entry = f"{ENTRIES_DIR}/{ENTRY_FILE}"
+    _remove_old_script(sysm)
+    if on:
+        if not sysm.have("grubby"):
+            raise Refused("this system has no grubby; the boot menu entry was not added")
+        usual, fields = _default_entry(sysm)
+        text = maintenance_entry(fields)
+        if sysm.read(entry) != text:
+            sysm.write(entry, text, mode=0o644)
+        keep_usual_default(sysm, usual[:-len(".conf")])
+        wanted = BOOT_UNIT.replace("@HELPER@", HELPER_PATH)
+        if not os.path.exists(unit) or sysm.read(f"/etc/systemd/system/{BOOT_UNIT_NAME}") != wanted:
+            sysm.write(f"/etc/systemd/system/{BOOT_UNIT_NAME}", wanted)
+            sysm.run(["systemctl", "daemon-reload"])
+            sysm.run(["systemctl", "enable", BOOT_UNIT_NAME])
+    else:
+        if os.path.exists(sysm.path(entry)):
+            os.remove(sysm.path(entry))
+        if os.path.exists(unit):
+            sysm.run(["systemctl", "disable", BOOT_UNIT_NAME])
+            os.remove(unit)
+            sysm.run(["systemctl", "daemon-reload"])
+    state = sysm.state()
+    state["boot_entry"] = bool(on)
+    sysm.save_state(state)
+    return {"ok": True}
+
+
+def boot_entry_refresh(sysm):
+    """After a kernel update, point the entry at the new default kernel. Quiet when off."""
+    if not sysm.state().get("boot_entry"):
+        return {"ok": True, "skipped": True}
+    return boot_entry(sysm, True)
+
+
+def boot_check(sysm, cmdline=None):
+    """Run before the login screen: was the maintenance entry chosen in the boot menu?"""
+    if cmdline is None:
+        cmdline = sysm.read("/proc/cmdline")
+    if MAINT_ARG not in cmdline.split():
+        return {"ok": True, "maintenance": False}
+    state = sysm.state()
+    owner = state.get("owner")
+    if not owner or state.get("boot_maintenance"):
+        return {"ok": True, "maintenance": bool(owner)}
+    # This one login: the desktop, and the login screen asks for the tablet's password.
+    if state.get("session") == "kiosk":
+        session(sysm, "desktop", {})
+        state = sysm.state()
+        state["boot_back_to_kiosk"] = True
+    gdm = sysm.read(GDM_CONF)
+    if gdm and f"AutomaticLogin={owner}" in gdm and "AutomaticLoginEnable=True" in gdm:
+        sysm.write(GDM_CONF, gdm_autologin(gdm, None))
+        state["autologin_paused"] = True
+    state["boot_maintenance"] = True
+    sysm.save_state(state)
+    return {"ok": True, "maintenance": True}
+
+
+def boot_maintenance_done(sysm):
+    """The visit has begun (or DoubleTake is back): automatic login and DoubleTake only as before."""
+    state = sysm.state()
+    if not state.get("boot_maintenance"):
+        return {"ok": True, "done": False}
+    if state.pop("autologin_paused", False) and state.get("owner"):
+        gdm = sysm.read(GDM_CONF)
+        sysm.write(GDM_CONF, gdm_autologin(gdm, state["owner"]))
+    back = state.pop("boot_back_to_kiosk", False)
+    state.pop("boot_maintenance", None)
+    sysm.save_state(state)
+    if back:
+        session(sysm, "kiosk", {})
+    return {"ok": True, "done": True}
+
+
+# ----- who is connected ------------------------------------------------------------
+
+
+def parse_smbstatus_json(text):
+    """Sessions and open files from 'smbstatus --json'."""
+    data = json.loads(text)
+    sessions, files = [], []
+    for item in (data.get("sessions") or {}).values():
+        sessions.append({"user": item.get("username", ""),
+                         "machine": item.get("remote_machine", "") or item.get("hostname", ""),
+                         "address": (item.get("hostname", "") or "").replace("ipv4:", "").split(":")[0],
+                         "kind": "smb"})
+    for path, item in (data.get("open_files") or {}).items():
+        name = item.get("filename") or path
+        if name and name not in (".", "/") and not name.endswith("/."):
+            files.append(name.split("/")[-1] if "/" in name else name)
+    return sessions, files
+
+
+def parse_smbstatus_text(sessions_text, locks_text):
+    """The same, from the plain-text forms, for older Samba.
+
+    smbstatus -b:  PID  Username  Group  Machine (ipv4:address:port)  Protocol ...
+    smbstatus -L:  Pid  User(ID)  DenyMode  Access  R/W  Oplock  SharePath  Name  Time (5 words)
+    """
+    sessions, files = [], []
+    for line in sessions_text.splitlines():
+        parts = line.split()
+        if len(parts) >= 5 and parts[0].isdigit():
+            address = parts[3]
+            if parts[4].startswith("(ipv4:") or parts[4].startswith("(ipv6:"):
+                address = parts[4][6:].rstrip(")").rsplit(":", 1)[0]
+            sessions.append({"user": parts[1], "machine": parts[3], "address": address, "kind": "smb"})
+    for line in locks_text.splitlines():
+        parts = line.split()
+        if len(parts) >= 13 and parts[0].isdigit() and parts[4] in ("RDONLY", "RDWR", "WRONLY"):
+            name = " ".join(parts[7:-5])
+            if name and name != ".":
+                files.append(name.split("/")[-1])
+    return sessions, files
+
+
+def sftp_peers(text):
+    """Peers from 'ss -Htn state established': Recv-Q  Send-Q  Local:Port  Peer:Port."""
+    peers = []
+    for line in text.splitlines():
+        parts = line.split()
+        if len(parts) >= 4:
+            address = parts[3].rsplit(":", 1)[0].strip("[]")
+            if address:
+                peers.append({"user": "", "machine": address, "address": address, "kind": "sftp"})
+    return peers
+
+
+def snapshot(sysm):
+    sessions, files = [], []
+    code, out, _ = sysm.run(["smbstatus", "--json"], timeout=20)
+    if code == 0 and out.strip().startswith("{"):
+        try:
+            sessions, files = parse_smbstatus_json(out)
+        except ValueError:
+            pass
+    else:
+        _, b, _ = sysm.run(["smbstatus", "-b"], timeout=20)
+        _, locks, _ = sysm.run(["smbstatus", "-L"], timeout=20)
+        sessions, files = parse_smbstatus_text(b, locks)
+    _, ss, _ = sysm.run(["ss", "-Htn", "state", "established", f"( sport = :{SFTP_PORT} )"], timeout=10)
+    sessions += sftp_peers(ss)
+    return {"time": time.time(), "sessions": sessions, "open": sorted(set(files))[:20]}
+
+
+def status_loop(sysm, once=False):
+    while True:
+        try:
+            sysm.write("/run/doubletake/nas-status.json", json.dumps(snapshot(sysm)))
+        except Exception:  # keep going: the screens only show what was last written
+            pass
+        if once:
+            return {"ok": True}
+        time.sleep(3)
+
+
+# ----- system updates: only looked for here, never installed --------------------------------
+#
+# dnf needs root to read the system's own software sources (on Red Hat, its subscription
+# certificates). This only asks what is waiting, for the update check in Maintenance;
+# installing is done in the terminal with the tablet's password, never from here.
+
+
+def parse_check_update(text):
+    """Package lines from 'dnf -q check-update': [(name, arch)]."""
+    found = []
+    for row in text.splitlines():
+        parts = row.split()
+        if len(parts) == 3 and "." in parts[0] and not row.startswith(" "):
+            name, _, arch = parts[0].rpartition(".")
+            found.append((name, arch))
+        elif row.strip().lower().startswith("obsoleting"):
+            break
+    return found
+
+
+def parse_security(text):
+    """Advisories from 'dnf -q updateinfo list --security': the number of different ones."""
+    ids = set()
+    for row in text.splitlines():
+        parts = row.split()
+        if len(parts) >= 3 and re.match(r"^[A-Z][A-Z0-9]+-[0-9]", parts[0]):
+            ids.add(parts[0])
+    return len(ids)
+
+
+def updates_check(sysm):
+    code, out, err = sysm.run(["dnf", "-q", "check-update"], timeout=600)
+    if code not in (0, 100):
+        raise Refused("could not reach the software sources: " + (err.strip().splitlines() or ["no answer"])[-1][:160])
+    packages = parse_check_update(out)
+    code, sec, _ = sysm.run(["dnf", "-q", "updateinfo", "list", "--security", "--available"], timeout=300)
+    return {"ok": True, "count": len(packages), "security": parse_security(sec) if code == 0 else 0,
+            "kernel": any(name.startswith("kernel") for name, _ in packages)}
+
+
+# ----- the tablet's own keys (P1, P2, P3 on the Dell Latitude 7220) ---------------------------
+#
+# The keys come through the firmware's own small input device, as KEY_PROG1, KEY_PROG2 and
+# KEY_PROG3, each press as one instant tap. Reading input devices needs root, so this job
+# reads them and prints one line per press, for the screens: {"key": "p1"}. Only a device
+# that has those keys and no letter keys is ever opened, so no typing can be read.
+
+INPUT_SYS = "/sys/class/input"
+KEY_CODES = {148: "p1", 149: "p2", 202: "p3",  # KEY_PROG1, KEY_PROG2, KEY_PROG3
+             224: "brightness_down", 225: "brightness_up"}  # the screen's own keys (Video Bus)
+REPEATS = {"brightness_down", "brightness_up"}  # held down, these go on stepping
+KEY_A = 30
+# Every letter key (Q to P, A to L, Z to M): a device with any of them is a keyboard, never read.
+LETTER_KEYS = tuple(range(16, 26)) + tuple(range(30, 39)) + tuple(range(44, 51))
+EVENT = struct.Struct("llHHi")  # struct input_event: time, type, code, value
+EV_KEY = 1
+
+
+def _has_key(bitmap_text, code):
+    words = bitmap_text.split()
+    index = len(words) - 1 - code // 64
+    if index < 0:
+        return False
+    try:
+        return bool(int(words[index], 16) >> (code % 64) & 1)
+    except ValueError:
+        return False
+
+
+def key_devices(sysm):
+    """The input devices that carry the P keys or the brightness keys and are not a keyboard
+    (no letter keys, so typing is never read): /dev/input/eventN paths."""
+    found = []
+    try:
+        names = sorted(os.listdir(sysm.path(INPUT_SYS)))
+    except OSError:
+        return found
+    for name in names:
+        if not re.fullmatch(r"event[0-9]+", name):
+            continue
+        bitmap = sysm.read(f"{INPUT_SYS}/{name}/device/capabilities/key")
+        if any(_has_key(bitmap, code) for code in KEY_CODES) and not any(_has_key(bitmap, c) for c in LETTER_KEYS):
+            found.append(f"/dev/input/{name}")
+    return found
+
+
+def key_presses(data):
+    """The P keys pressed in a run of input events (bytes): ['p1', ...]."""
+    out = []
+    for offset in range(0, len(data) - EVENT.size + 1, EVENT.size):
+        _, _, kind, code, value = EVENT.unpack_from(data, offset)
+        if kind == EV_KEY and code in KEY_CODES and (value == 1 or (value == 2 and KEY_CODES[code] in REPEATS)):
+            out.append(KEY_CODES[code])
+    return out
+
+
+def watch_keys(sysm, out=None):
+    """Print one line per key press, until the screens stop listening."""
+    import select
+
+    out = out or sys.stdout
+    devices = key_devices(sysm)
+    if not devices:
+        return {"ok": False, "error": "no P keys or brightness keys on this tablet"}
+    files = [open(sysm.path(d), "rb", buffering=0) for d in devices]
+    try:
+        while True:
+            ready, _, _ = select.select(files, [], [], 60)
+            for fh in ready:
+                for key in key_presses(fh.read(EVENT.size * 32)):
+                    out.write(json.dumps({"key": key}) + "\n")
+                    out.flush()
+    except BrokenPipeError:
+        return {"ok": True}
+    finally:
+        for fh in files:
+            fh.close()
+
+
+# ----- entry point -----------------------------------------------------------------
+
+
+# ----- moving over from the name Field Station -------------------------------------------
+#
+# DoubleTake was called Field Station before 0.8.1. Its settings, the NAS, the SFTP view and
+# the boot screen lived under that name. This moves what root owns to the new names, once;
+# setup.sh then runs install, which writes the NAS files again under the new names.
+
+OLD_ETC = "/etc/fieldstation"
+NEW_ETC = "/etc/doubletake"
+OLD_UNITS = ("fieldstation-sftp.service", "fieldstation-nas-status.service", "srv-fieldstation-Photos.mount")
+OLD_FILES = ("/etc/samba/fieldstation.conf", "/etc/ssh/fieldstation_sftp_config")
+OLD_SPLASH_DIR = "/usr/share/plymouth/themes/fieldstation"
+
+
+# ----- the first setup after installing the package --------------------------------------
+#
+# The package (RPM) puts the program and this helper in place for every user. What belongs
+# to the tablet's own user is done once, in a terminal through sudo (install.sh, or
+# doubletake setup): the rule that lets the screens run this helper without a password,
+# the NAS, the boot menu entry and the boot screen. The same as setup.sh does.
+
+SUDOERS_FILE = "/etc/sudoers.d/doubletake"
+
+
+def sudo_rule(user):
+    return (f"# DoubleTake: the screens switch the NAS on and off through this helper.\n"
+            f"{user} ALL=(root) NOPASSWD: {HELPER_PATH}\n")
+
+
+def splash_default(sysm):
+    """The DoubleTake boot screen, on, unless it was ever switched on or off before: a fresh
+    install shows it off, and a choice someone made is kept."""
+    if "splash" in sysm.state():
+        return {"ok": True, "skipped": True}
+    if not os.path.isfile(sysm.path(f"{SPLASH_DIR}/{SPLASH_NAME}.plymouth")):
+        return {"ok": True, "skipped": True}
+    return splash(sysm, True)
+
+
+def adopt(sysm, library, env):
+    owner = invoking_user(env)
+    if not OWNER_RE.match(owner.pw_name):
+        raise Refused(f"the user name {owner.pw_name!r} has characters the sudo rule cannot hold")
+    rule = sudo_rule(owner.pw_name)
+    if sysm.root == "/":
+        trial = SUDOERS_FILE + ".new"
+        sysm.write(trial, rule, mode=0o440)
+        code, _, err = sysm.run(["visudo", "-cf", trial])
+        if code != 0:
+            os.remove(trial)
+            raise Refused("the sudo rule did not check out: " + err.strip())
+        os.replace(trial, SUDOERS_FILE)
+    else:
+        sysm.write(SUDOERS_FILE, rule, mode=0o440)
+    done = ["sudo"]
+    # Moving from setup.sh to the package: one helper only, the package's.
+    old = HELPER_PATHS[1]
+    if HELPER_PATH == HELPER_PATHS[0] and os.path.isfile(sysm.path(old)):
+        os.remove(sysm.path(old))
+        done.append("old helper removed")
+    if os.path.exists(sysm.path(OLD_ETC)) or os.path.isdir(sysm.path(OLD_SPLASH_DIR)):
+        migrate_old_names(sysm)
+        done.append("moved from Field Station")
+    sub = dict(env)
+    sub["SUDO_USER"] = owner.pw_name
+    try:
+        install(sysm, library, sub)
+        done.append("nas")
+    except Refused as exc:
+        done.append(f"nas: {exc}")
+    try:
+        boot_entry(sysm, True)
+        done.append("boot menu")
+    except Refused as exc:
+        done.append(f"boot menu: {exc}")
+    try:
+        if not splash_default(sysm).get("skipped"):
+            done.append("boot screen")
+    except (Refused, OSError, subprocess.SubprocessError) as exc:
+        done.append(f"boot screen: {exc}")
+    return {"ok": True, "user": owner.pw_name, "done": done}
+
+
+def migrate_old_names(sysm):
+    done = []
+    # Settings: the NAS state, the DoubleTake password and its tries.
+    old_etc, new_etc = sysm.path(OLD_ETC), sysm.path(NEW_ETC)
+    if os.path.isdir(old_etc):
+        os.makedirs(new_etc, exist_ok=True)
+        os.chmod(new_etc, 0o755)  # the screens read nas.json; the password files are 0600 themselves
+        for name in os.listdir(old_etc):
+            if not os.path.exists(os.path.join(new_etc, name)):
+                os.rename(os.path.join(old_etc, name), os.path.join(new_etc, name))
+        shutil.rmtree(old_etc, ignore_errors=True)
+        done.append("settings")
+    # The NAS and SFTP under the old names: stopped and removed. install writes them again.
+    for unit in OLD_UNITS:
+        full = sysm.path(f"/etc/systemd/system/{unit}")
+        if os.path.exists(full):
+            sysm.run(["systemctl", "disable", "--now", unit])
+            os.remove(full)
+            done.append(unit)
+    for path in OLD_FILES:
+        if os.path.exists(sysm.path(path)):
+            os.remove(sysm.path(path))
+    for folder in ("/srv/fieldstation/Photos", "/srv/fieldstation"):
+        try:
+            os.rmdir(sysm.path(folder))
+        except OSError:
+            pass
+    old_original = sysm.path("/etc/samba/smb.conf.before-fieldstation")
+    if os.path.exists(old_original) and not os.path.exists(sysm.path(SMB_ORIGINAL)):
+        os.rename(old_original, sysm.path(SMB_ORIGINAL))
+    if done:
+        sysm.run(["systemctl", "daemon-reload"])
+    # The boot screen: if the old one is in use, switch to the new one (it rebuilds the
+    # start-up images, a few minutes), then remove the old theme.
+    splash_done = False
+    if os.path.isdir(sysm.path(OLD_SPLASH_DIR)):
+        code, out, _ = sysm.run(["plymouth-set-default-theme"], timeout=30)
+        if code == 0 and out.strip() == "fieldstation":
+            before = sysm.state().get("splash_before")  # the system's own, from before Field Station
+            splash(sysm, True)  # notes the old theme as the one before; put the real one back
+            state = sysm.state()
+            if before and before != "fieldstation":
+                state["splash_before"] = before
+            else:
+                state.pop("splash_before", None)
+            sysm.save_state(state)
+            splash_done = True
+        shutil.rmtree(sysm.path(OLD_SPLASH_DIR), ignore_errors=True)
+        done.append("boot screen")
+    return {"ok": True, "done": done, "splash": splash_done}
+
+
+def main(argv, sysm=None, env=None, stdin=None):
+    sysm = sysm or System()
+    env = os.environ if env is None else env
+    try:
+        if not argv:
+            raise Refused("no job given")
+        job, args = argv[0], argv[1:]
+        if job == "install" and len(args) == 2 and args[0] == "--library":
+            result = install(sysm, args[1], env)
+        elif job == "set-user" and len(args) == 1:
+            password = (stdin if stdin is not None else sys.stdin.read()).rstrip("\n")
+            result = set_user(sysm, args[0], password)
+        elif job in ("nas", "sftp") and len(args) == 1 and args[0] in ("on", "off"):
+            result = switch(sysm, job, args[0] == "on")
+        elif job == "zone" and len(args) in (2, 3):
+            result = zone(sysm, args[0], args[1], args[2] if len(args) == 3 else "")
+        elif job == "hotspot-zone" and len(args) == 1 and args[0] in ("on", "off"):
+            result = hotspot_zone(sysm, args[0] == "on")
+        elif job == "phone-port" and len(args) == 2 and args[0] in ("on", "off"):
+            result = phone_port(sysm, args[0] == "on", args[1])
+        elif job == "prepare-drive" and len(args) == 2:
+            result = prepare_drive(sysm, args[0], args[1])
+        elif job == "format-card" and len(args) == 2:
+            result = format_card(sysm, args[0], args[1])
+        elif job == "status-check" and not args:
+            result = status_service(sysm)
+        elif job == "status-loop" and not args:
+            result = status_loop(sysm)
+        elif job == "keys" and not args:
+            result = watch_keys(sysm)
+        elif job == "updates" and args == ["check"]:
+            result = updates_check(sysm)
+        elif job == "autologin" and len(args) == 1 and args[0] in ("on", "off"):
+            result = autologin(sysm, args[0] == "on", env)
+        elif job == "session" and len(args) == 1 and args[0] in ("kiosk", "desktop"):
+            result = session(sysm, args[0], env)
+        elif job == "splash" and len(args) == 1 and args[0] in ("on", "off"):
+            result = splash(sysm, args[0] == "on")
+        elif job == "splash" and args == ["default"]:
+            result = splash_default(sysm)
+        elif job == "edition" and len(args) == 1 and args[0] in ("tron", "off"):
+            result = edition(sysm, "" if args[0] == "off" else args[0])
+        elif job == "edition" and args == ["status"]:
+            result = {"ok": True, "edition": sysm.state().get("edition") or ""}
+        elif job == "splash" and args == ["script"]:
+            write_script(sysm)  # after an upgrade with the boot screen off: ready for when it is on
+            result = {"ok": True}
+        elif job == "splash" and args == ["tune"]:
+            result = splash_tune(sysm)
+        elif job == "splash" and args == ["refresh"]:
+            # After an upgrade brings new boot screen files: rebuild, if it is the one in use.
+            code, out, _ = sysm.run(["plymouth-set-default-theme"], timeout=30)
+            if code == 0 and out.strip() == SPLASH_NAME:
+                result = splash(sysm, True, force=True)
+            else:
+                result = {"ok": True, "skipped": True}
+        elif job == "fs-password" and len(args) == 1 and args[0] in ("status", "check", "set", "none", "clear"):
+            text = "" if args[0] in ("status", "clear") else (stdin if stdin is not None else sys.stdin.read())
+            result = fs_password(sysm, args[0], text, env)
+        elif job == "boot-entry" and len(args) == 1 and args[0] in ("on", "off"):
+            result = boot_entry(sysm, args[0] == "on")
+        elif job == "boot-entry" and args == ["refresh"]:
+            result = boot_entry_refresh(sysm)
+        elif job == "flicker" and args == ["status"]:
+            result = flicker_status(sysm)
+        elif job == "flicker" and len(args) == 1 and args[0] in ("on", "off"):
+            result = flicker(sysm, args[0] == "on")
+        elif job == "boot-check" and not args:
+            result = boot_check(sysm)
+        elif job == "boot-maintenance" and args == ["done"]:
+            result = boot_maintenance_done(sysm)
+        elif job == "adopt" and len(args) == 2 and args[0] == "--library":
+            result = adopt(sysm, args[1], env)
+        elif job == "migrate-old-names" and not args:
+            result = migrate_old_names(sysm)
+        elif job == "reset" and not args:
+            result = reset(sysm)
+        else:
+            raise Refused("unknown job")
+    except Refused as exc:
+        result = {"ok": False, "error": str(exc)}
+    except (KeyError, OSError, subprocess.SubprocessError) as exc:
+        result = {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+    print(json.dumps(result))
+    return 0 if result.get("ok") else 1
+
+
+if __name__ == "__main__":
+    if os.geteuid() != 0:
+        print(json.dumps({"ok": False, "error": "this helper runs as root, through sudo"}))
+        sys.exit(1)
+    os.umask(0o022)
+    sys.exit(main(sys.argv[1:]))

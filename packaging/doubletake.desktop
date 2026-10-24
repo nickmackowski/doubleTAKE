@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=DoubleTake
+GenericName=Camera backup
+Comment=Two verified copies of every photo, and Safe to Format only when it is true
+Exec=/usr/bin/doubletake gui
+Icon=doubletake
+Terminal=false
+Categories=Graphics;Photography;
+Keywords=camera;backup;photos;NAS;
