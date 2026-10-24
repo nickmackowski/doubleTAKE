@@ -11,9 +11,4 @@ how it got here in [How DoubleTake came to be](docs/HISTORY.md). Made for this r
 - The way into Maintenance, and out to a restart or shutdown, listed step by step.
 - A screen flicker fix for Intel graphics.
 - An even frame round the photo in the viewer.
-- A new icon, and a boot screen to match that takes over from the maker's logo.
-- An independent review before release, and the root helper hardened after it: the photos
-  folder's path may only use plain characters, so it can never add settings to the share's
-  or the mount's files; the tablet's built-in storage is never taken for the card slot; a
-  drive is checked to be the same one just before it is erased; and the key reader ignores
-  any device with letter keys.
+- A new icon, and a boot screen to match that get its inspiration from the icon.
