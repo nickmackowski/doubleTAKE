@@ -52,7 +52,7 @@ DEFAULTS = {
     "nas_trusted": [],
     # A cable that finds no network becomes a direct link to the laptop at the other end.
     "direct_cable": True,
-    # Where the second copy lives: "microsd" (the card slot) or "usb" (a USB drive, beta).
+    # Where the second copy lives: "microsd" (the card slot) or "usb" (a USB drive).
     "second_copy_device": "microsd",
     # Rename photos as they come off the camera, from a pattern (see naming.py).
     "rename_on_import": False,
@@ -61,6 +61,8 @@ DEFAULTS = {
     "photo_sort": "taken_asc",
     # The zoom level double-tap goes to in the viewer: 50, 75 or 100 percent.
     "viewer_zoom": 100,
+    # The viewer's line of photo details on the photo: shown, or hidden with a tap.
+    "viewer_info": True,
     # The desktop's own lock and blanking settings, kept while Start at power-on is on.
     "desktop_saved": {},
 }

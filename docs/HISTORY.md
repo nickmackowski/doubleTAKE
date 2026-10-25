@@ -303,7 +303,6 @@ which wrote the code with Nick, and stays on every release from here.
 
 ## What comes next
 
-- **1.0.2c**: the first update through Maintenance mode's own updater, to prove it.
 - Checks that the tablet is hardened (disk encryption, a boot password).
 - Maybe: Rocky and Red Hat 10, once 9 is closer to its end (2032).
 - Someday: photos over Wi-Fi as they are taken, from cameras that can upload to a server.

@@ -138,6 +138,14 @@ class SettingsTests(unittest.TestCase):
             self.assertNotEqual(settings.apply(cfg, {"photo_sort": "size_asc"}), "")
             self.assertNotEqual(settings.apply(cfg, {"viewer_zoom": 60}), "")
 
+    def test_viewer_info_shown_or_hidden(self):
+        cfg = {}
+        with mock.patch.object(settings.config, "save"):
+            self.assertEqual(settings.apply(cfg, {"viewer_info": False}), "")
+            self.assertIs(cfg["viewer_info"], False)
+            self.assertNotEqual(settings.apply(cfg, {"viewer_info": "no"}), "")
+            self.assertIs(cfg["viewer_info"], False)
+
 
 @unittest.skipUnless(HAVE_PIL, "needs Pillow")
 class ZoomTests(unittest.TestCase):

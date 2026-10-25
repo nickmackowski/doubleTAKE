@@ -614,7 +614,7 @@ function render() {
     const was = shown;
     shown = v;
     stopping = false;
-    if (v === "ready") { $("rdy-name").value = ""; markChips(); refreshFolder(); }
+    if (v === "ready") refreshFolder();
     if (v === "library") loadLibrary();
     if (v === "settings") loadSettings();
     if (was === "viewer") leaveFull();
@@ -886,20 +886,23 @@ function renderHome() {
     pic.className = "pic";
     if (shoot.cover) pic.append(picture(shoot.cover));
     row.append(pic);
+    // The full folder name, and the number of photos under it. A longer name from before
+    // 1.0.2c is shortened in the middle, so the number that tells imports apart still shows.
+    const words = document.createElement("div");
+    words.className = "words";
     const name = document.createElement("div");
     name.className = "mono";
-    // The tile is narrow: without the year, and shortened in the middle, so the end that
-    // tells two imports apart (import_01, import_02) always shows.
-    name.textContent = middle(leaf(shoot.folder).replace(/^\d{4}_(\d{4}_)/, "$1"), 15);
+    name.textContent = middle(leaf(shoot.folder), 19);
     name.title = leaf(shoot.folder);
     const count = document.createElement("div");
     count.className = "n";
-    count.textContent = n(shoot.files);
+    count.textContent = n(shoot.files) + plural(shoot.files, " photo", " photos");
+    words.append(name, count);
     const badge = document.createElement("div");
     if (shoot.files > 0 && shoot.mirrored >= shoot.files) { badge.className = "badge green"; badge.textContent = "2 copies"; }
     else if (shoot.mirrored > 0) { badge.className = "badge"; badge.textContent = n(shoot.mirrored) + " on 2nd"; }
     else { badge.className = "badge orange"; badge.textContent = "1 copy"; }
-    row.append(name, count, badge);
+    row.append(words, badge);
     return row;
   });
 
@@ -1048,20 +1051,6 @@ function renderReady() {
   setText("rdy-card-badge", s.ok ? "Second" : "");
   $("rdy-card-badge").className = "badge ink";
 
-  const names = [];
-  for (const name of (S.quick_names || []).concat(S.names || [])) {
-    if (name && names.indexOf(name) < 0 && names.length < 5) names.push(name);
-  }
-  rebuild("rdy-chips", names, (name) => {
-    const chip = document.createElement("button");
-    chip.type = "button";
-    chip.className = "btn";
-    chip.textContent = name;
-    chip.addEventListener("click", () => { $("rdy-name").value = name; nameChanged(); });
-    return chip;
-  });
-  markChips();
-
   const start = $("btn-start");
   start.disabled = !(c.new > 0 && room) || !!S.power_problem;
   show("rdy-power", !!S.power_problem);
@@ -1069,20 +1058,10 @@ function renderReady() {
   setText("btn-start-text", c.new > 0 ? "Start backup" : "Nothing new to copy");
 }
 
-function markChips() {
-  const value = $("rdy-name").value.trim();
-  for (const chip of $("rdy-chips").children) chip.classList.toggle("on", chip.textContent === value);
-}
-
-let folderTimer = 0;
-function nameChanged() {
-  markChips();
-  clearTimeout(folderTimer);
-  folderTimer = setTimeout(refreshFolder, 150);
-}
+// The folder the backup goes in. Every import is named the same way: 2026_1015_import_01.
 async function refreshFolder() {
   try {
-    const reply = await fetch("/api/folder?name=" + encodeURIComponent($("rdy-name").value.trim()), { cache: "no-store" });
+    const reply = await fetch("/api/folder?name=", { cache: "no-store" });
     setText("rdy-folder", (await reply.json()).folder);
   } catch (err) { /* the next poll reports a lost engine */ }
 }
@@ -1278,20 +1257,8 @@ $("btn-sec").addEventListener("click", (event) => {
   const action = event.currentTarget.dataset.action;
   if (action) post(action);
 });
-$("rdy-name").addEventListener("click", () => {
-  const names = [];
-  for (const name of (S.quick_names || []).concat(S.names || [])) {
-    if (name && names.indexOf(name) < 0 && names.length < 6) names.push(name);
-  }
-  openKeyboard({
-    label: "Shoot name", value: $("rdy-name").value, max: 60, chips: names,
-    hint: "In the folder name it is lower case, with _ for spaces. Left blank, it is import: " +
-          "each backup gets its own numbered folder, like 2026_1015_import_01.",
-    done: (name) => { $("rdy-name").value = name; nameChanged(); },
-  });
-});
 $("btn-start").addEventListener("click", async () => {
-  const reply = await post("/api/backup/start", { name: $("rdy-name").value.trim() });
+  const reply = await post("/api/backup/start", { name: "" });
   if (reply.error) { show("rdy-power", true); setText("rdy-power-text", reply.error); return; }
   view = "home";
 });
@@ -1344,7 +1311,7 @@ $("dev-exit").addEventListener("click", async () => {
 let lib = null;        // the library as last loaded
 let libAt = 0;         // when it was loaded
 let shoot = null;      // the shoot being browsed, with its photos
-let vw = { index: 0, info: null, full: false, crop: null, fx: 0.5, fy: 0.5, x: 0, y: 0, token: 0, scale: 1 };
+let vw = { index: 0, info: null, full: false, crop: null, fx: 0.5, fy: 0.5, x: 0, y: 0, token: 0, scale: 1, tapTimer: 0 };
 let prefs = null;      // the settings as last loaded
 let section = "display";
 
@@ -1607,11 +1574,15 @@ function showPhoto() {
   const token = ++vw.token;
   leaveFull();
   setText("vw-name", file.name);
+  setText("vw-time", new Date(file.taken * 1000).toTimeString().slice(0, 8));
+  $("vw-exif").replaceChildren();
+  show("vw-info", false);
   show("vw-note", false);
   const fit = $("vw-fit");
   fit.hidden = false;
   fit.onerror = () => {
     fit.hidden = true;
+    show("vw-info", false);
     $("stage").classList.remove("matted");
     setText("vw-note", lib && !lib.viewer ? "Run doubletake setup in a terminal with the tablet online to add the image library."
                                             : "No preview stored in this file.");
@@ -1620,17 +1591,17 @@ function showPhoto() {
   fit.src = "/photo/" + file.id + "/screen.jpg";
   const taken = new Date(file.taken * 1000);
   setText("vw-taken", taken.toTimeString().slice(0, 8));
-  show("vw-exif", false);
   vw.info = null;
   getJSON("/api/photo?id=" + file.id).then((info) => {
     if (token !== vw.token) return;
     vw.info = info;
-    const time = info.taken && info.taken.length >= 19 ? info.taken.slice(11, 19) : $("vw-taken").textContent;
-    const parts = [info.shutter, info.aperture, info.iso, info.focal, time].filter(Boolean);
-    const box = $("vw-exif");
-    box.replaceChildren(...parts.map((text) => { const el = document.createElement("span"); el.textContent = text; return el; }));
-    show("vw-exif", parts.length > 0);
-    if (info.taken && info.taken.length >= 19) setText("vw-taken", info.taken.slice(11, 19));
+    if (info.taken && info.taken.length >= 19) {
+      setText("vw-taken", info.taken.slice(11, 19));
+      setText("vw-time", info.taken.slice(11, 19));
+    }
+    const parts = [info.shutter, info.aperture, info.iso, info.focal].filter(Boolean);
+    $("vw-exif").replaceChildren(...parts.map((text) => { const el = document.createElement("span"); el.textContent = text; return el; }));
+    placeInfo();
   }).catch(() => {});
 
   // The strip of nearby frames, ten at a time.
@@ -1667,6 +1638,7 @@ function leaveFull() {
   show("vw-mode", false);
   if ($("vw-fit").src) { $("vw-fit").hidden = false; placeFit(); }
   markZoom(0);
+  placeInfo();
 }
 
 function markZoom(level) {
@@ -1687,6 +1659,7 @@ function placeFull() {
   img.style.width = w + "px";
   img.style.height = h + "px";
   img.style.transform = "translate(" + vw.x + "px," + vw.y + "px)";
+  placeInfo();
 }
 
 async function enterFull(fx, fy) {
@@ -1765,6 +1738,45 @@ function placeFit() {
   img.style.left = Math.round((box.width - w) / 2 - frame) + "px";
   img.style.top = Math.round((box.height - h) / 2 - frame) + "px";
   $("stage").classList.add("matted");
+  placeInfo();
+}
+
+// The photo's name, time and settings: in the photo's bottom-left corner when it is fitted,
+// in the screen's bottom-left when zoomed in. One line, or two (broken at the dot) when one
+// does not fit. A tap on the photo hides or shows it, for every photo, until tapped again.
+function infoOn() { return !prefs || prefs.viewer_info !== false; }
+
+function placeInfo() {
+  const el = $("vw-info");
+  const fit = $("vw-fit"), full = $("vw-full");
+  const showing = vw.full ? !full.hidden : (!fit.hidden && fit.naturalWidth > 0 && !!fit.style.width);
+  show("vw-info", showing);
+  if (!showing) return;
+  el.classList.toggle("off", !infoOn());
+  el.querySelector(".vi-sep").hidden = !$("vw-exif").children.length;
+  const box = stageBox();
+  const rem = parseFloat(getComputedStyle(document.documentElement).fontSize) || 16;
+  const inset = rem;
+  let left = inset, bottom = inset, room = box.width - 2 * inset;
+  if (!vw.full) {
+    const frame = parseFloat(fit.style.padding) || 0;
+    const x = parseFloat(fit.style.left) + frame, y = parseFloat(fit.style.top) + frame;
+    const w = parseFloat(fit.style.width), h = parseFloat(fit.style.height);
+    left = x + inset;
+    bottom = box.height - (y + h) + inset;
+    room = w - 2 * inset;
+  }
+  el.style.left = Math.round(left) + "px";
+  el.style.bottom = Math.round(bottom) + "px";
+  el.classList.remove("two");
+  if (el.scrollWidth > room) el.classList.add("two");
+}
+
+function toggleInfo() {
+  const on = !infoOn();
+  if (prefs) prefs.viewer_info = on;
+  post("/api/settings", { changes: { viewer_info: on } });
+  placeInfo();
 }
 $("vw-fit").addEventListener("load", placeFit);
 if (window.ResizeObserver) new ResizeObserver(placeFit).observe($("stage"));
@@ -1799,7 +1811,13 @@ $("stage").addEventListener("pointerup", (event) => {
       const px = c.fx * info.width - crop.left, py = c.fy * info.height - crop.top;
       if (px < crop.w * 0.3 || px > crop.w * 0.7 || py < crop.h * 0.3 || py > crop.h * 0.7) enterFull(c.fx, c.fy);
     } else if (!was.moved && Date.now() - lastTap < 350) {
+      clearTimeout(vw.tapTimer);
+      lastTap = 0;
       leaveFull();
+      return;
+    } else if (!was.moved) {
+      clearTimeout(vw.tapTimer);
+      vw.tapTimer = setTimeout(toggleInfo, 350);
     }
     lastTap = was.moved ? 0 : Date.now();
     return;
@@ -1807,6 +1825,7 @@ $("stage").addEventListener("pointerup", (event) => {
   if (was.moved && Math.abs(dx) > 60) { step(dx < 0 ? 1 : -1); return; }
   if (!was.moved) {
     if (Date.now() - lastTap < 350) {
+      clearTimeout(vw.tapTimer);
       const f = fitFraction(event.clientX, event.clientY);
       vw.fx = f.fx; vw.fy = f.fy;
       lastTap = 0;
@@ -1814,6 +1833,8 @@ $("stage").addEventListener("pointerup", (event) => {
       enterFull(f.fx, f.fy);
     } else {
       lastTap = Date.now();
+      clearTimeout(vw.tapTimer);
+      vw.tapTimer = setTimeout(toggleInfo, 350);
     }
   }
 });
@@ -2462,24 +2483,12 @@ function renderSettings() {
     ? "On. Plug in the camera: after a 10-second countdown you can cancel, the new photos are copied, into a shoot folder named by the date (2026_1015_import_01, then _02). What to copy and the battery rules apply."
     : "Start a backup by itself when the camera is plugged in, after a 10-second countdown you can cancel.");
   setText("set-library", prefs.library);
-  $("set-names").replaceChildren(...prefs.quick_names.map((name) => {
-    const chip = document.createElement("button");
-    chip.type = "button";
-    chip.className = "btn";
-    chip.textContent = name;
-    const x = document.createElement("span");
-    x.className = "x";
-    x.textContent = "\u00d7";
-    chip.append(x);
-    chip.addEventListener("click", () => change({ quick_names: prefs.quick_names.filter((q) => q !== name) }));
-    return chip;
-  }));
 
   toggle("set-second", prefs.second_copy === "on");
   segment("set-second-device", prefs.second_copy_device);
   const onUsb = prefs.second_copy_device === "usb";
   setText("set-device-text", onUsb
-    ? "Beta. The drive need not stay plugged in: photos backed up while it is away are copied when it is back."
+    ? "The drive need not stay plugged in: photos backed up while it is away are copied when it is back."
     : "The card in the tablet's own slot.");
   setText("set-folder-title", onUsb ? "Folder on the drive" : "Folder on the card");
   setText("set-card-folder", prefs.second_copy_folder + (prefs.second_copy_path ? "   in " + prefs.second_copy_path : ""));
@@ -2849,10 +2858,6 @@ $("set-login").addEventListener("click", async () => {
   await change({ start_at_power_on: on });
   await loadSettings();
 });
-$("set-addname").addEventListener("click", () => openKeyboard({
-  label: "New one-tap name", value: "", max: 40,
-  done: (name) => { if (name) change({ quick_names: prefs.quick_names.concat([name]) }); },
-}));
 $("net-scan").addEventListener("click", scanNetworks);
 $("net-disconnect").addEventListener("click", () => post("/api/network/disconnect"));
 $("net-hotspot").addEventListener("click", async () => {

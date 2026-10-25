@@ -49,10 +49,8 @@ strict in practice:
 ### Backup
 - **Finds the camera by itself** when it is plugged in, reads its cards and shows how many
   photos are new, how much data, and the camera's battery.
-- **Copies only what is new**, into a folder of its own for each import, named by the day,
-  the shoot name and a number: `2026_1015_ramp_sunset_01`, or `2026_1015_import_01` when no
-  name is typed. Names are lower case, with `_` for spaces. Name the shoot with one tap or
-  type one on the built-in keyboard.
+- **Copies only what is new**, into a folder of its own for each import, named by the day
+  and a number: `2026_1015_import_01`, then `2026_1015_import_02`.
 - **Live progress**: files and data copied, time left, speed, and a running count of
   verified and failed files.
 - **Shows the camera by name**, with its brand: Nikon D850, Canon EOS-1D Mark II,
@@ -94,7 +92,7 @@ strict in practice:
 ![Backup complete: every photo verified on both copies, safe to format](docs/images/backup-complete.png)
 
 ### Second copy on a microSD card or a USB drive
-- **microSD card or USB drive (beta)**, chosen in the settings. A USB drive need not stay
+- **microSD card or USB drive**, chosen in the settings. A USB drive need not stay
   plugged in: photos backed up while it is away are copied when it is back, and the camera
   cards are not called safe to format until they are.
 - **Runs in the background** from the tablet's drive, starting once a tenth of the camera

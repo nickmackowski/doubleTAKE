@@ -210,11 +210,8 @@
 
     <div class="col">
       <div class="card pad">
-        <div class="label">Shoot name</div>
-        <input id="rdy-name" class="name" type="text" maxlength="60" autocomplete="off" autocapitalize="off"
-               spellcheck="false" readonly inputmode="none" placeholder="Tap to type a name, or leave blank">
-        <div id="rdy-chips" class="chips"></div>
-        <div class="folder-line"><span class="label">Folder</span><span id="rdy-folder" class="mono"></span></div>
+        <div class="label">Shoot folder</div>
+        <div id="rdy-folder" class="mono rdy-folder"></div>
       </div>
       <div class="card pad grow col-flex">
         <div class="label">Copying to</div>
@@ -411,9 +408,8 @@
         <img id="vw-fit" class="fit" alt="" draggable="false">
         <img id="vw-full" class="full" alt="" draggable="false" hidden>
         <div id="vw-note" class="note-c" hidden></div>
-        <div id="vw-name" class="tag fname"></div>
         <div id="vw-mode" class="tag mode" hidden>100%</div>
-        <div id="vw-exif" class="tag exif" hidden></div>
+        <div id="vw-info" class="vw-info"><span class="vi-who"><span id="vw-name"></span><span id="vw-time"></span></span><span class="vi-sep">&#8226;</span><span id="vw-exif" class="vi-how"></span></div>
       </div>
       <div class="tools">
         <button id="vw-prev" class="btn sq" type="button" aria-label="Previous"><svg viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7"/></svg></button>
@@ -740,18 +736,10 @@
     <div class="panel scroll" data-panel="folders" hidden>
       <div class="card">
         <div class="setrow">
-          <div class="what"><div class="t">Shoot folders</div><div class="body">Each backup gets a folder of its own: the day, the name typed (or import) and a number. <span class="mono">2026_1015_import_01</span>, then <span class="mono">_02</span>.</div></div>
+          <div class="what"><div class="t">Shoot folders</div><div class="body">Each backup gets a folder of its own: the day, import and a number. <span class="mono">2026_1015_import_01</span>, then <span class="mono">_02</span>.</div></div>
         </div>
         <div class="setrow">
           <div class="what"><div class="t">Library</div><div id="set-library" class="body mono"></div></div>
-        </div>
-      </div>
-      <div class="card">
-        <div class="t lead">One-tap shoot names</div>
-        <div class="body">Offered when a backup starts, before the names used most recently. Tap a name to remove it.</div>
-        <div id="set-names" class="chips" style="margin-top:.75rem"></div>
-        <div class="namebox">
-          <button id="set-addname" class="btn" type="button">Add a name</button>
         </div>
       </div>
       <div class="card">
@@ -779,7 +767,7 @@
           <div class="what"><div class="t">Where it goes</div><div id="set-device-text" class="body"></div></div>
           <div class="seg" id="set-second-device">
             <button type="button" data-v="microsd">microSD card</button>
-            <button type="button" data-v="usb">USB drive <span class="beta">Beta</span></button>
+            <button type="button" data-v="usb">USB drive</button>
           </div>
         </div>
         <div class="setrow">

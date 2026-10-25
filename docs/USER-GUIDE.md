@@ -123,7 +123,7 @@ Full screen runs a separate Firefox of its own, which Exit closes. It does
 not touch your normal Firefox. If the screens are closed by accident, run
 `doubletake gui` again: it finds the engine still running and opens the screens.
 
-**Typing:** tapping a shoot name, or Add a Name in the settings, opens the app's own
+**Typing:** tapping a box that takes text, such as a Wi-Fi password, opens the app's own
 keyboard at the bottom of the screen. A keyboard plugged into the tablet types into it
 too, and Enter finishes.
 
@@ -131,16 +131,10 @@ The screens are served to this tablet only (127.0.0.1). Nothing is reachable fro
 network. Reloading or closing the browser does not stop a backup: the engine keeps
 going and the screens pick up wherever it is.
 
-Shoot names offered as one-tap buttons come from `quick_names` in the settings file,
-plus the names used most recently.
-
 **Where a backup goes:** each backup copies only the photos that are new since the
-last one, into a folder of its own: the day of the import, the shoot name, and a number.
-Left blank, the name is `import`: `2026_1015_import_01`, then `2026_1015_import_02` the
-next time the camera is plugged in that day. A typed name takes its place, in lower case
-with `_` for spaces: "Ramp Sunset" is `2026_1015_ramp_sunset_01`. Characters that Windows
-or a Mac cannot hold in a folder name (`/ \ : * ? " < > |`) are left out. The numbers count
-per name per day. If the camera's cards
+last one, into a folder of its own: the day of the import, `import`, and a number:
+`2026_1015_import_01`, then `2026_1015_import_02` the next time the camera is plugged in
+that day. If the camera's cards
 were not formatted in between, the records know what is already on the tablet, so the next
 folder holds only the new photos. A backup stopped part-way is carried on in its own
 folder. The start screen shows the folder before you start.
@@ -148,7 +142,7 @@ folder. The start screen shows the folder before you start.
 **Gaps in the numbers are normal.** A deleted shoot's number is not used again. Import three
 times in a day (`_01`, `_02`, `_03`), delete `_03`, and the next import that day is `_04`,
 not `_03`. So a folder already brought onto your editing workstation as `_03` is never
-mixed up with a different shoot of the same name, and the records never mix the two.
+mixed up with a different import, and the records never mix the two.
 
 To try the screens without a camera, point them at any folder of photos:
 
@@ -198,7 +192,11 @@ Safe to Format counts Copy 1 and Copy 2 only.
   at half the sensor's size: the camera's white balance and an automatic brightness, good
   for choosing and checking photos but not a finished conversion. Making its pictures
   takes about a second each.
-- Exposure (shutter, aperture, ISO, focal length) and the time taken come from the NEF.
+- **On the photo,** in its bottom-left corner: the file name and the time taken, then a dot
+  and the exposure (shutter, aperture, ISO, focal length), read from the RAW file. It is
+  one line, or two when the photo is too narrow for one (portrait photos), broken where the
+  dot is. Zoomed in, it sits in the screen's bottom-left corner instead. **Tap the photo**
+  to hide it, and again to show it; the choice stays for every photo until you tap again.
 - **Sort:** at the top of a shoot's photos, by capture time or by name, either way round.
   Capture time, oldest first, is the default. The choice is remembered, and the viewer
   follows the same order.
@@ -215,7 +213,7 @@ Settings, Folders and naming, **Photo names**:
   | --- | --- |
   | `{date}` | the date it was taken: `2026-10-11` |
   | `{time}` | the time it was taken: `141205` |
-  | `{shoot}` | the shoot name |
+  | `{shoot}` | the shoot name: `import` |
   | `{seq}` | a running number in the shoot: `0001` |
   | `{orig}` | the camera's own name: `DSC_4841` |
   | `{num}` | the camera's number: `4841` |
@@ -295,8 +293,8 @@ Getting them off the tablet:
   starts to see it. Classic comes in Daylight, Slate,
   Night and Night Red; Cockpit in Cockpit Dark, Cockpit Light and Cockpit Red. The look changes only how the screens are
   drawn, never what they do.
-- **Folders and naming:** how shoot folders are named, and the one-tap names.
-- **Second copy:** on or off, where it goes (the microSD card, or a USB drive, beta), and
+- **Folders and naming:** how shoot folders are named, and photo names.
+- **Second copy:** on or off, where it goes (the microSD card, or a USB drive), and
   use or set aside the card or drive that is in. See below.
 - **Network:** Wi-Fi and the hotspot. See below.
 - **Bluetooth:** keyboards, mice and the like. See below.
@@ -338,7 +336,7 @@ Settings, Network:
 All of this goes through the desktop's NetworkManager, so networks joined here also show
 in GNOME's own settings, and the other way round.
 
-### Second copy on a USB drive (beta)
+### Second copy on a USB drive
 
 Settings, Second copy, **Where it goes**: microSD card or USB drive. Only the chosen kind is
 used; a USB drive is ignored while microSD card is chosen, and the other way round.
@@ -737,7 +735,6 @@ Settings live in `~/.config/doubletake/config.json`:
 | `chunk_mb` | `8` | Size of each read when reading in pieces |
 | `second_copy` | `auto` | `auto` uses a card found in the tablet, `off` switches the second copy off, a folder path uses that folder |
 | `second_copy_folder` | `DoubleTake` | The app's folder on the card |
-| `quick_names` | none: add your own in Settings, Backup rules | Shoot names offered as one-tap buttons |
 | `theme` | `daylight` | `daylight`, `slate`, `night` or `nightred` |
 | `port` | `8765` | Port the screens are served on, to this tablet only |
 | `hotspot_name` | `DoubleTake` | Name of the tablet's own Wi-Fi network |

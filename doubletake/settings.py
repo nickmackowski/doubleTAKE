@@ -64,6 +64,7 @@ def public(cfg: dict) -> dict:
         "rename_pattern": cfg.get("rename_pattern") or naming.DEFAULT_PATTERN,
         "rename_tokens": naming.TOKENS,
         "viewer_zoom": int(cfg.get("viewer_zoom", 100)),
+        "viewer_info": bool(cfg.get("viewer_info", True)),
         "about": about(cfg),
     }
 
@@ -127,6 +128,8 @@ def apply(cfg: dict, changes: dict) -> str:
         elif key == "photo_sort" and value in ("taken_asc", "taken_desc", "name_asc", "name_desc"):
             clean[key] = value
         elif key == "viewer_zoom" and value in (50, 75, 100):
+            clean[key] = value
+        elif key == "viewer_info" and isinstance(value, bool):
             clean[key] = value
         elif key == "start_at_login" and isinstance(value, bool):
             error = set_autostart(value)

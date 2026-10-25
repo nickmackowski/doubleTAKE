@@ -168,6 +168,11 @@ exit 0
 %ghost /usr/share/plymouth/themes/doubletake/doubletake.plymouth
 
 %changelog
+* Sun Oct 25 2026 DoubleTake <doubletake@users.noreply.github.com> - 1.0.2c-1
+- The viewer's photo details on the photo, one line, hidden with a tap
+- The full shoot name on the home screen; every shoot is an import
+- The USB drive for the second copy is no longer beta
+
 * Wed Oct 21 2026 DoubleTake <doubletake@users.noreply.github.com> - 1.0.1c-1
 - The first public release
 
