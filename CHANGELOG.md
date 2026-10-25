@@ -22,4 +22,4 @@ how it got here in [How DoubleTake came to be](docs/HISTORY.md). Made for this r
 - The way into Maintenance, and out to a restart or shutdown, listed step by step.
 - A screen flicker fix for Intel graphics.
 - An even frame round the photo in the viewer.
-- A new icon, and a boot screen to match that get its inspiration from the icon.
+- A new icon, and a boot screen to match that gets its inspiration from the icon.

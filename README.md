@@ -10,7 +10,7 @@ makes a second verified copy on a microSD card, and tells you when it is truly s
 format your camera's cards. Back home, it shares the photos with your computer as a
 read-only network drive, so any photo app on your editing workstation can import straight from it.
 
-This project is a demonstration of what becomes possible when a idea and AI-assistance development come together. If you have an idea for a personal tool and think you lack the technical background to build it — this project is proof that you might be wrong. Fun Fact: Claude AI even helped write this README and most of the supporting documentation ;-) Like the rest of the project, it's not perfect—but hopefully it's useful. If you spot anything that needs improvement, feel free to update it. 
+This project is a demonstration of what becomes possible when an idea and AI-assisted development come together. If you have an idea for a personal tool and think you lack the technical background to build it — this project is proof that you might be wrong. Fun Fact: Claude AI even helped write this README and most of the supporting documentation ;-) Like the rest of the project, it's not perfect—but hopefully it's useful. If you spot anything that needs improvement, feel free to update it. 
 
 Thanks and have a great day!
 
