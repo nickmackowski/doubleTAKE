@@ -34,6 +34,15 @@ if (handoff) {
     if (bgrt_h > side) {
         side = bgrt_h;
     }
+    small = bgrt_w;
+    if (bgrt_h < small) {
+        small = bgrt_h;
+    }
+    # A round logo drawn a little oval (the 7220's is 411 x 430): meet it in the middle, so
+    # the two rings overlap evenly all the way round as one fades into the other.
+    if (small * 100 >= side * 85) {
+        side = (bgrt_w + bgrt_h) / 2;
+    }
     scale = side / 366;
 } else if (514 > Window.GetHeight() * 0.45) {
     scale = Window.GetHeight() * 0.45 / 514;

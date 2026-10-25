@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.0.2.5c
+- **The boot screen's ring meets the maker's logo evenly.** The 7220's Dell logo is drawn a
+  little oval (411 by 430), and the ring was sized to its height, so at the sides it stood
+  out past Dell's circle while one faded into the other. It is now sized between the two,
+  and the rings overlap evenly all the way round. A wide logo, such as a name on its own,
+  is still ringed by its longer side.
+
 ## 1.0.2c
 The first release offered by Maintenance mode's own updater.
 - **The viewer's details sit on the photo:** the file name and time taken, a dot, then the

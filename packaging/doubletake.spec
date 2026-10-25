@@ -168,6 +168,9 @@ exit 0
 %ghost /usr/share/plymouth/themes/doubletake/doubletake.plymouth
 
 %changelog
+* Sun Oct 25 2026 DoubleTake <doubletake@users.noreply.github.com> - 1.0.2.5c-1
+- The boot screen's ring sized to meet the maker's logo evenly all the way round
+
 * Sun Oct 25 2026 DoubleTake <doubletake@users.noreply.github.com> - 1.0.2c-1
 - The viewer's photo details on the photo, one line, hidden with a tap
 - The full shoot name on the home screen; every shoot is an import
