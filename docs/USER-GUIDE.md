@@ -20,9 +20,11 @@ Then DoubleTake, two ways: the package, which is the easy one, or setup.sh from 
 
 ### The package
 
-Download `doubletake-<version>-1.el9.x86_64.rpm` (Red Hat, Rocky or Alma 9) or
-`doubletake-<version>-1.fc.x86_64.rpm` (Fedora), and `install.sh`, into one folder. Then,
-as the tablet's own user (an administrator: in the wheel group):
+Download `doubletake-<version>.zip` from the latest release and unpack it (double-click
+it in Files). It holds the package for Red Hat, Rocky and Alma 9 (`el9`), the one for
+Fedora (`fc`), and `install.sh`, which picks the right one. The packages and install.sh are
+also on the release on their own. Then, in the unpacked folder, as the tablet's own user
+(an administrator: in the wheel group):
 
     bash install.sh
 
@@ -101,6 +103,9 @@ What happens by itself:
 
 - **The camera is found when it is plugged in.** The home screen reads its cards and
   shows how many photos are new. The first read after plugging in takes about a minute.
+- **Start begins the backup.** Tap **Back up camera** on the home screen, or press P1 on
+  the 7220, and copying starts straight away. If it cannot (the tablet's battery is too low
+  off its charger, or there is not enough room), a message says why.
 - **The second copy runs in the background.** It starts once a tenth of the backup from
   the camera is done and follows a little behind it, from the tablet's own drive: it only
   ever takes photos already verified on the tablet. As soon as the photos are on the
@@ -137,7 +142,7 @@ last one, into a folder of its own: the day of the import, `import`, and a numbe
 that day. If the camera's cards
 were not formatted in between, the records know what is already on the tablet, so the next
 folder holds only the new photos. A backup stopped part-way is carried on in its own
-folder. The start screen shows the folder before you start.
+folder.
 
 **Gaps in the numbers are normal.** A deleted shoot's number is not used again. Import three
 times in a day (`_01`, `_02`, `_03`), delete `_03`, and the next import that day is `_04`,
@@ -192,7 +197,8 @@ Safe to Format counts Copy 1 and Copy 2 only.
   at half the sensor's size: the camera's white balance and an automatic brightness, good
   for choosing and checking photos but not a finished conversion. Making its pictures
   takes about a second each.
-- **On the photo,** in its bottom-left corner: the file name and the time taken, then a dot
+- **On the photo,** in its bottom-left corner: the file name, the day and time taken
+  (`10-22-26  14:21:45`), then a dot
   and the exposure (shutter, aperture, ISO, focal length), read from the RAW file. It is
   one line, or two when the photo is too narrow for one (portrait photos), broken where the
   dot is. Zoomed in, it sits in the screen's bottom-left corner instead. **Tap the photo**
@@ -456,7 +462,7 @@ Settings, Backup rules, **What to copy**:
 - **RAW + JPEG** (the default): RAW and JPEG photos. Videos stay on the camera.
 - **Everything:** every file in the camera's DCIM folder, videos too.
 
-What is left on the camera is listed on the Ready screen. The camera cards are never called
+What is left on the camera is counted on the camera cards tile. The camera cards are never called
 safe to format while anything is left on them: the card tile says the copied photos are
 safe, and how many JPEGs or videos would be lost by formatting. Changing the setting reads
 the camera again.
@@ -630,7 +636,8 @@ closed, so nothing is ever being copied while packages change. In the field noth
 looked for.
 
 - At a Maintenance visit, when the tablet is due a look (every 30 days, or every 60 or
-  90: Settings, Device, Updates), a terminal opens and asks **Check for updates now?**
+  90: Settings, Device, Updates), a terminal opens, a third larger than usual, and asks
+  **Check for updates now?**
 - **Off:** nothing is looked for at a Maintenance visit, not even security fixes. Keep the
   tablet up to date yourself, with `doubletake update` in a terminal.
 - It looks for the system's own updates (Rocky, Red Hat or Fedora) and says how many are

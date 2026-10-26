@@ -1,5 +1,21 @@
 # Changelog
 
+## 1.0.3c
+- **Start begins the backup.** Tapping Back up camera on the home screen starts copying
+  straight away, as P1 does. If it cannot start (the tablet's battery too low off its
+  charger, or not enough room), a message says why.
+- **The day a photo was taken** is in the viewer's line now: `10-22-26  14:21:45`.
+- **The boot screen's ring takes the shape of the start-up logo.** A round maker's logo
+  stored a little oval, as the 7220's is, gets a ring of that very shape and place, so one
+  turns into the other with nothing to line up. The ring spins without wobbling.
+- **No jump in brightness at start-up.** The panel comes up at full brightness, and the
+  level you last used used to come back in one step partway through the boot screen. It now
+  fades down to it in about a second.
+- **Larger terminal windows.** The updater and the other terminals DoubleTake opens come up
+  a third larger than usual, window and text alike, on Red Hat and Rocky.
+- **One download:** each release has a zip with both packages and install.sh, which picks
+  the right package itself.
+
 ## 1.0.2.5c
 - **The boot screen's ring meets the maker's logo evenly.** The 7220's Dell logo is drawn a
   little oval (411 by 430), and the ring was sized to its height, so at the sides it stood

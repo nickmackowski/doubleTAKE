@@ -213,7 +213,7 @@ def open_app(which: str) -> str:
     """Open the desktop's file manager or terminal on top of the screens."""
     choices = {
         "files": [["nautilus", os.path.expanduser("~")], ["xdg-open", os.path.expanduser("~")]],
-        "terminal": [["gnome-terminal"], ["ptyxis"], ["konsole"], ["xterm"]],
+        "terminal": [["gnome-terminal", "--geometry=80x24", "--zoom=1.35"], ["ptyxis"], ["konsole"], ["xterm"]],
     }
     for command in choices.get(which, []):
         if shutil.which(command[0]):

@@ -1248,7 +1248,19 @@ async function prepareDrive() {
 
 // ----- buttons ----------------------------------------------------------------------
 
-$("cam-ready").addEventListener("click", () => { view = "ready"; render(); });
+// Start on the home screen starts the backup itself, as P1 does. Anything that stops it
+// (the tablet's battery, no room) is said in a message instead.
+$("cam-ready").addEventListener("click", async () => {
+  const c = S.camera;
+  if (S.power_problem) { tell("Not now", S.power_problem); return; }
+  if (c.new_bytes + 2e9 > S.tablet.free) {
+    tell("Not enough room", "This backup needs " + bytes(c.new_bytes) + ", and the tablet has " +
+         bytes(S.tablet.free) + " free. Delete shoots that are on both copies, in the shoot library.");
+    return;
+  }
+  const reply = await post("/api/backup/start", { name: "" });
+  if (reply.error) tell("The backup did not start", reply.error);
+});
 $("back").addEventListener("click", () => go(BACK[shown] || "home"));
 $("btn-scan").addEventListener("click", () => post("/api/camera/scan"));
 $("btn-rescan").addEventListener("click", () => post("/api/camera/scan"));
@@ -1321,6 +1333,13 @@ async function getJSON(path) {
   const reply = await fetch(path, { cache: "no-store" });
   if (!reply.ok) throw new Error(String(reply.status));
   return reply.json();
+}
+
+// A message with one button.
+function tell(title, text) {
+  show("confirm-no", false);
+  $("confirm-yes").classList.remove("danger");
+  ask(title, text, "OK").then(() => { show("confirm-no", true); $("confirm-yes").classList.add("danger"); });
 }
 
 function ask(title, text, yes) {
@@ -1574,7 +1593,9 @@ function showPhoto() {
   const token = ++vw.token;
   leaveFull();
   setText("vw-name", file.name);
-  setText("vw-time", new Date(file.taken * 1000).toTimeString().slice(0, 8));
+  const when = new Date(file.taken * 1000);
+  setText("vw-date", shortDate(when.getFullYear(), when.getMonth() + 1, when.getDate()));
+  setText("vw-time", when.toTimeString().slice(0, 8));
   $("vw-exif").replaceChildren();
   show("vw-info", false);
   show("vw-note", false);
@@ -1598,6 +1619,8 @@ function showPhoto() {
     if (info.taken && info.taken.length >= 19) {
       setText("vw-taken", info.taken.slice(11, 19));
       setText("vw-time", info.taken.slice(11, 19));
+      const [y, m, d] = info.taken.slice(0, 10).split(/[-:]/).map(Number);
+      if (y && m && d) setText("vw-date", shortDate(y, m, d));
     }
     const parts = [info.shutter, info.aperture, info.iso, info.focal].filter(Boolean);
     $("vw-exif").replaceChildren(...parts.map((text) => { const el = document.createElement("span"); el.textContent = text; return el; }));
@@ -1744,6 +1767,12 @@ function placeFit() {
 // The photo's name, time and settings: in the photo's bottom-left corner when it is fitted,
 // in the screen's bottom-left when zoomed in. One line, or two (broken at the dot) when one
 // does not fit. A tap on the photo hides or shows it, for every photo, until tapped again.
+// The day a photo was taken, as 07-04-26: month, day and year, two digits each.
+function shortDate(y, m, d) {
+  const two = (v) => String(v).padStart(2, "0");
+  return two(m) + "-" + two(d) + "-" + two(y % 100);
+}
+
 function infoOn() { return !prefs || prefs.viewer_info !== false; }
 
 function placeInfo() {

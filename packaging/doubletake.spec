@@ -71,6 +71,7 @@ install -d %{buildroot}/usr/lib/doubletake
 cp -a vendor/. %{buildroot}/usr/lib/doubletake/
 install -D -m 0755 packaging/doubletake %{buildroot}/usr/bin/doubletake
 install -D -m 0755 system/doubletake-helper %{buildroot}/usr/libexec/doubletake-helper
+install -D -m 0644 packaging/doubletake-backlight.service %{buildroot}/usr/lib/systemd/system/doubletake-backlight.service
 install -D -m 0644 packaging/doubletake.desktop %{buildroot}/usr/share/applications/doubletake.desktop
 install -D -m 0644 packaging/doubletake.png %{buildroot}/usr/share/icons/hicolor/256x256/apps/doubletake.png
 install -D -m 0644 packaging/doubletake.svg %{buildroot}/usr/share/icons/hicolor/scalable/apps/doubletake.svg
@@ -107,6 +108,9 @@ if [ -d /usr/share/plymouth/themes/spinner ]; then
 fi
 touch -c /usr/share/icons/hicolor >/dev/null 2>&1 || :
 gtk-update-icon-cache -q /usr/share/icons/hicolor >/dev/null 2>&1 || :
+# The backlight's fade at start-up, instead of the system's one-step jump.
+systemctl daemon-reload >/dev/null 2>&1 || :
+systemctl enable doubletake-backlight.service >/dev/null 2>&1 || :
 exit 0
 
 %posttrans
@@ -129,6 +133,7 @@ if [ $1 -eq 0 ]; then
     # Removing DoubleTake: the NAS off, the boot screen, the kiosk session and the boot menu
     # entry back as they were, and the screens' rule removed. Photos and records are kept.
     /usr/libexec/doubletake-helper reset >/dev/null 2>&1 || :
+    systemctl disable doubletake-backlight.service >/dev/null 2>&1 || :
     rm -f /etc/sudoers.d/doubletake
 fi
 exit 0
@@ -145,6 +150,7 @@ exit 0
 %doc README.md CHANGELOG.md docs/USER-GUIDE.md docs/HOW-IT-WORKS.md docs/HISTORY.md
 /usr/bin/doubletake
 /usr/libexec/doubletake-helper
+/usr/lib/systemd/system/doubletake-backlight.service
 /usr/share/doubletake
 /usr/lib/doubletake
 /usr/share/applications/doubletake.desktop
@@ -168,6 +174,11 @@ exit 0
 %ghost /usr/share/plymouth/themes/doubletake/doubletake.plymouth
 
 %changelog
+* Mon Oct 26 2026 DoubleTake <doubletake@users.noreply.github.com> - 1.0.3c-1
+- Start on the home screen begins the backup; the date in the viewer's line
+- The boot ring in the start-up logo's own shape; the backlight fades at start-up
+- Larger terminal windows; one zip per release
+
 * Sun Oct 25 2026 DoubleTake <doubletake@users.noreply.github.com> - 1.0.2.5c-1
 - The boot screen's ring sized to meet the maker's logo evenly all the way round
 

@@ -10,6 +10,7 @@ import shutil
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 HERE = Path(__file__).resolve().parent
 loader = importlib.machinery.SourceFileLoader("doubletake_helper", str(HERE.parent / "system" / "doubletake-helper"))
@@ -649,6 +650,54 @@ class SplashDefaultTests(HelperBase):
         finally:
             helper.splash = real
         self.assertEqual(seen, [True])
+
+
+class BacklightTests(HelperBase):
+    def panel(self, now, top, saved=None, name="intel_backlight"):
+        base = os.path.join(self.root, "sys/class/backlight", name)
+        os.makedirs(base, exist_ok=True)
+        for f, v in (("brightness", now), ("max_brightness", top)):
+            with open(os.path.join(base, f), "w") as fh:
+                fh.write(f"{v}\n")
+        if saved is not None:
+            d = os.path.join(self.root, "var/lib/systemd/backlight")
+            os.makedirs(d, exist_ok=True)
+            with open(os.path.join(d, f"pci-0000:00:02.0:backlight:{name}"), "w") as fh:
+                fh.write(f"{saved}\n")
+        return os.path.join(base, "brightness")
+
+    def test_fades_down_to_the_saved_level_in_even_steps(self):
+        path = self.panel(96000, 96000, saved=24000)
+        written = []
+        real_open = open
+        def spy(file, mode="r", *a, **kw):
+            fh = real_open(file, mode, *a, **kw)
+            if file == path and "w" in mode:
+                write = fh.write
+                fh.write = lambda text: (written.append(int(text)), write(text))[1]
+            return fh
+        with mock.patch("builtins.open", spy):
+            result = helper.backlight_fade(self.sys, sleep=lambda s: None)
+        self.assertEqual(result["faded"], [{"panel": "intel_backlight", "from": 96000, "to": 24000}])
+        self.assertEqual(written[-1], 24000)
+        self.assertEqual(written, sorted(written, reverse=True))  # always down, never back up
+        self.assertGreater(len(written), 10)
+        self.assertEqual(int(self.file("/sys/class/backlight/intel_backlight/brightness")), 24000)
+
+    def test_nothing_saved_or_nothing_to_change(self):
+        self.panel(96000, 96000)
+        self.assertEqual(helper.backlight_fade(self.sys, sleep=lambda s: None)["faded"], [])
+        self.panel(500, 1000, saved=500, name="acpi_video0")
+        self.assertEqual(helper.backlight_fade(self.sys, sleep=lambda s: None)["faded"], [])
+
+    def test_never_darker_than_the_system_allows(self):
+        self.panel(1000, 1000, saved=0)
+        result = helper.backlight_fade(self.sys, sleep=lambda s: None)
+        self.assertEqual(result["faded"][0]["to"], 50)  # 5%, as the system clamps it
+
+    def test_a_strange_panel_name_is_left_alone(self):
+        self.panel(1000, 1000, saved=300, name="bad name")
+        self.assertEqual(helper.backlight_fade(self.sys, sleep=lambda s: None)["faded"], [])
 
 
 class FlickerTests(HelperBase):

@@ -224,8 +224,9 @@ strict in practice:
 
 ### The package
 
-Download the package for your system from the latest release, and `install.sh` with it,
-into one folder. Then, as the tablet's own user:
+Download `doubletake-<version>.zip` from the latest release and unpack it (double-click it
+in Files). It holds the packages for both systems and `install.sh`, which picks the right
+one. Then, in that folder, as the tablet's own user:
 
 ```bash
 bash install.sh

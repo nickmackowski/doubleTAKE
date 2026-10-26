@@ -1,5 +1,6 @@
 # Builds the two DoubleTake packages (el9 for Rocky / Red Hat / Alma 9, fc for Fedora), runs
-# the tests, and puts the packages, install.sh and SHA256SUMS together as one download.
+# the tests, and puts the packages, install.sh and SHA256SUMS together as one download. For
+# people, one zip holds both packages and install.sh, which picks the right package itself.
 # On a version tag (v1.0.1c, ...) the same files are attached to that tag's release, ready
 # for Maintenance mode's updater, which checks every file against SHA256SUMS.
 name: Build packages
@@ -21,7 +22,7 @@ jobs:
       - name: Tools
         run: |
           sudo apt-get update -q
-          sudo apt-get install -y -q rpm python3-pip python3-pil
+          sudo apt-get install -y -q rpm python3-pip python3-pil zip
 
       - name: Tests
         run: python3 -m unittest discover -s tests -q
@@ -29,12 +30,17 @@ jobs:
       - name: Packages
         run: bash packaging/build-rpm.sh dist
 
-      - name: install.sh and checksums
+      - name: install.sh, the zip and checksums
         run: |
           cp packaging/install.sh dist/
+          version=$(python3 -c "import doubletake; print(doubletake.__version__)")
           cd dist
           ls doubletake-*.rpm install.sh
-          sha256sum doubletake-*.rpm install.sh > SHA256SUMS
+          mkdir "doubletake-$version"
+          cp doubletake-*.rpm install.sh "doubletake-$version/"
+          zip -q -r "doubletake-$version.zip" "doubletake-$version"
+          rm -r "doubletake-$version"
+          sha256sum doubletake-*.rpm install.sh "doubletake-$version.zip" > SHA256SUMS
           cat SHA256SUMS
 
       - uses: actions/upload-artifact@v4
@@ -42,6 +48,7 @@ jobs:
           name: doubletake-packages
           path: |
             dist/doubletake-*.rpm
+            dist/doubletake-*.zip
             dist/install.sh
             dist/SHA256SUMS
 
@@ -51,4 +58,4 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1 || gh release create "$GITHUB_REF_NAME" --draft --title "DoubleTake ${GITHUB_REF_NAME#v}" --notes "See CHANGELOG.md."
-          gh release upload "$GITHUB_REF_NAME" dist/doubletake-*.rpm dist/install.sh dist/SHA256SUMS --clobber
+          gh release upload "$GITHUB_REF_NAME" dist/doubletake-*.zip dist/doubletake-*.rpm dist/install.sh dist/SHA256SUMS --clobber

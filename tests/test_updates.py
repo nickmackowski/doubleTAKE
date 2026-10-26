@@ -227,5 +227,16 @@ class WallpaperTests(unittest.TestCase):
                 self.assertFalse(maintenance.quiet())
 
 
+
+class TerminalTests(unittest.TestCase):
+    def test_gnome_terminal_opens_big(self):
+        started = []
+        which = lambda name: "/usr/bin/" + name if name == "gnome-terminal" else None
+        with mock.patch.object(updates.shutil, "which", which), \
+                mock.patch.object(updates.subprocess, "Popen", lambda args, **kw: started.append(args)):
+            self.assertTrue(updates.open_terminal(["doubletake", "update"]))
+        self.assertEqual(started, [["gnome-terminal", "--geometry=80x24", "--zoom=1.35", "--", "doubletake", "update"]])
+
+
 if __name__ == "__main__":
     unittest.main()

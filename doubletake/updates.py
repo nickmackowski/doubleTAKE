@@ -174,9 +174,14 @@ def check_sums(folder: Path, sums_text: str, names) -> str:
 # ----- the terminal ----------------------------------------------------------------------------
 
 
+# GNOME's terminal (Red Hat and Rocky) opens a third larger than usual, window and text alike, so it
+# reads easily on the tablet's screen. Other terminals open as they are set up.
+BIG_TERMINAL = ("--geometry=80x24", "--zoom=1.35")
+
+
 def open_terminal(command: list) -> bool:
     """Open the desktop's own terminal running a command. False when there is none."""
-    for args in (["ptyxis", "--"], ["gnome-terminal", "--"], ["kgx", "--"], ["xterm", "-e"]):
+    for args in (["ptyxis", "--"], ["gnome-terminal", *BIG_TERMINAL, "--"], ["kgx", "--"], ["xterm", "-e"]):
         if shutil.which(args[0]):
             try:
                 subprocess.Popen(args + command, start_new_session=True,

@@ -120,10 +120,18 @@ only on the tablet; the second copy catches up when a card is put in.
   its own logo (the ACPI BGRT table, `/sys/firmware/acpi/bgrt`), the helper copies that
   logo in beside the theme and writes its place into the script: the boot screen shows it
   in the same spot on black, then fades it into the ring and icon, centred there and the
-  same size. Without the table (a VM, older firmware), the screen is centred. Without the plugin, a still picture of
+  same size. A round logo stored a little oval (the 7220's is 411 by 430) gets a ring of
+  that very shape, so the two lie on each other as one fades into the other; the script
+  turns the ring's colours first and shapes it after, so the oval stays still as it spins. Without the table (a VM, older firmware), the screen is centred. Without the plugin, a still picture of
   the same (`watermark.png`) on the system spinner theme's images.
   The helper's `splash on|off` job switches to it with `plymouth-set-default-theme -R`
   (which rebuilds the start-up image) and back to the theme it replaced.
+- **The backlight at start-up:** the firmware starts the panel at full brightness, and the
+  system puts the level last used back in one step, partway through the boot screen.
+  `doubletake-backlight.service` runs the helper's `backlight fade` job just before that:
+  it fades from where the panel is to the saved level in about a second, along a curve the
+  eye sees as even, so the system's own step has nothing left to change. The level is
+  still saved at shutdown by the system, as before.
 - **Batteries** are read every 20 seconds during a backup, between photos: the camera's
   through libgphoto2, the tablet's from `/sys/class/power_supply`. A stop for a battery is
   the same clean stop as the Stop button.

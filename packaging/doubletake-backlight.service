@@ -1,0 +1,20 @@
+# DoubleTake: at start-up, fade the panel from the firmware's full brightness to the level
+# last used, in about a second, just before the system puts that level back in one step.
+# The system's step then has nothing left to change, and it still saves the level at
+# shutdown as before. Nothing here runs at shutdown.
+[Unit]
+Description=DoubleTake: fade the backlight to its saved level
+DefaultDependencies=no
+RequiresMountsFor=/var/lib/systemd/backlight
+After=systemd-remount-fs.service
+Before=systemd-backlight@backlight:intel_backlight.service systemd-backlight@backlight:amdgpu_bl0.service systemd-backlight@backlight:acpi_video0.service
+Before=sysinit.target shutdown.target
+Conflicts=shutdown.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/libexec/doubletake-helper backlight fade
+TimeoutStartSec=10
+
+[Install]
+WantedBy=sysinit.target

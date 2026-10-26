@@ -861,6 +861,74 @@ KVER_RE = re.compile(r"^[A-Za-z0-9._+-]{1,80}$")
 FLICKER_ARGS = ("i915.enable_psr=0", "i915.enable_dc=0")
 
 
+# ----- the backlight at start-up ------------------------------------------------------------
+#
+# The firmware starts the panel at full brightness, and the system then puts back the level
+# last used in one step, which shows as a jump partway through the boot screen. Just before
+# the system does that, this fades from where the panel is to that same level, along a
+# curve the eye sees as even, in about a second. The system's own step then finds nothing
+# to change, and it still saves the level at shutdown as before.
+
+BACKLIGHT_DIR = "/sys/class/backlight"
+BACKLIGHT_SAVED = "/var/lib/systemd/backlight"
+BACKLIGHT_NAME_RE = re.compile(r"^[A-Za-z0-9_.-]{1,64}$")
+
+
+def _backlight_saved(sysm, name, top):
+    """The level the system saved for this panel, as it will put it back, or None."""
+    try:
+        files = sorted(os.listdir(sysm.path(BACKLIGHT_SAVED)))
+    except OSError:
+        return None
+    for fname in files:
+        if fname.endswith(":backlight:" + name):
+            try:
+                value = int(sysm.read(f"{BACKLIGHT_SAVED}/{fname}").strip())
+            except ValueError:
+                return None
+            # as the system does: never below 5% (or 1), so a panel is never left dark
+            return max(min(value, top), max(1, top * 5 // 100))
+    return None
+
+
+def backlight_fade(sysm, seconds=1.0, steps=40, sleep=time.sleep):
+    """Fade each panel's backlight to its saved level. Returns what was faded."""
+    faded = []
+    try:
+        names = sorted(os.listdir(sysm.path(BACKLIGHT_DIR)))
+    except OSError:
+        names = []
+    for name in names:
+        if not BACKLIGHT_NAME_RE.match(name):
+            continue
+        base = f"{BACKLIGHT_DIR}/{name}"
+        try:
+            now = int(sysm.read(f"{base}/brightness").strip())
+            top = int(sysm.read(f"{base}/max_brightness").strip())
+        except ValueError:
+            continue
+        if top <= 0:
+            continue
+        want = _backlight_saved(sysm, name, top)
+        if want is None or want == now:
+            continue
+        gamma = 2.2
+        a, b = (max(now, 0) / top) ** (1 / gamma), (want / top) ** (1 / gamma)
+        try:
+            for i in range(1, steps + 1):
+                t = i / steps
+                e = t * t * (3 - 2 * t)
+                level = want if i == steps else int(round(((a + (b - a) * e) ** gamma) * top))
+                with open(sysm.path(f"{base}/brightness"), "w") as fh:  # one value per write
+                    fh.write(f"{level}\n")
+                if i < steps:
+                    sleep(seconds / steps)
+        except OSError:
+            continue
+        faded.append({"panel": name, "from": now, "to": want})
+    return {"ok": True, "faded": faded}
+
+
 def flicker_status(sysm):
     """Is the flicker fix on? 'intel': the tablet has Intel graphics (the only kind it is
     for); 'set': in the boot settings; 'active': in the kernel running now."""
@@ -1993,6 +2061,8 @@ def main(argv, sysm=None, env=None, stdin=None):
             result = boot_entry(sysm, args[0] == "on")
         elif job == "boot-entry" and args == ["refresh"]:
             result = boot_entry_refresh(sysm)
+        elif job == "backlight" and args == ["fade"]:
+            result = backlight_fade(sysm)
         elif job == "flicker" and args == ["status"]:
             result = flicker_status(sysm)
         elif job == "flicker" and len(args) == 1 and args[0] in ("on", "off"):

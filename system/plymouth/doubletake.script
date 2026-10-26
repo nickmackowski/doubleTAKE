@@ -29,6 +29,7 @@ title.image = Image("wordmark" + edition + ".png");
 # the ring the size of that logo, centred where it was. Without: all of it at most 45% of the
 # screen's height, centred, so a small screen still shows everything.
 scale = 1;
+round_logo = 0;
 if (handoff) {
     side = bgrt_w;
     if (bgrt_h > side) {
@@ -38,10 +39,11 @@ if (handoff) {
     if (bgrt_h < small) {
         small = bgrt_h;
     }
-    # A round logo drawn a little oval (the 7220's is 411 x 430): meet it in the middle, so
-    # the two rings overlap evenly all the way round as one fades into the other.
+    # A round logo, even one stored a little oval (the 7220's is 411 x 430): the icon and the
+    # name are sized between its width and height, and the ring takes its shape (below).
     if (small * 100 >= side * 85) {
         side = (bgrt_w + bgrt_h) / 2;
+        round_logo = 1;
     }
     scale = side / 366;
 } else if (514 > Window.GetHeight() * 0.45) {
@@ -67,6 +69,14 @@ if (handoff) {
 
 ring.sprite = Sprite(ring.base);
 ring.sprite.SetPosition(logo.x, logo.y, 1);
+# A round start-up logo stored a little oval (the 7220's is 411 x 430): the ring takes the
+# very same shape and place, so one turns into the other with nothing to line up. The
+# colours turn first and the shape is applied after, so the oval stays still as it spins.
+oval = 0;
+if (handoff && round_logo) {
+    oval = 1;
+    ring.sprite.SetPosition(Window.GetX() + bgrt_x, Window.GetY() + bgrt_y, 1);
+}
 icon.sprite = Sprite(icon.image);
 icon.sprite.SetPosition(logo.x + (ring.size - icon.size) / 2, logo.y + (ring.size - icon.size) / 2, 2);
 title.sprite = Sprite(title.image);
@@ -110,7 +120,11 @@ fun refresh_callback () {
     if (turn > 6.2831853) {
         global.turn = turn - 6.2831853;
     }
-    ring.sprite.SetImage(ring.base.Rotate(turn));
+    if (oval) {
+        ring.sprite.SetImage(ring.base.Rotate(turn).Scale(bgrt_w, bgrt_h));
+    } else {
+        ring.sprite.SetImage(ring.base.Rotate(turn));
+    }
     if (going_down) {
         opacity = 1;
         if (ticks > 15) {
