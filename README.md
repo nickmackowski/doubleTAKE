@@ -312,6 +312,11 @@ docs/                user guide, design notes, testing guide, screenshots
 setup.sh             installer and upgrader from the source
 ```
 
+## Enjoying DoubleTake?
+
+DoubleTake is free and always will be. If it has looked after your photos and you'd like to
+say thanks, you can [buy me a beer](https://buymeacoffee.com/nickmackowski). 🍺
+
 ## License
 
 [MIT](LICENSE) © 2026 Nick Mackowski
