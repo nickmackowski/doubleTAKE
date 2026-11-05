@@ -341,6 +341,38 @@ if __name__ == "__main__":
     unittest.main()
 
 
+class TwoCameraTests(Base):
+    """Shoot with more than one camera: one game, one import, whichever camera comes first."""
+
+    def two_camera_backup(self, card):
+        source = FolderSource(str(card))
+        with source:
+            plan = make_plan(source, self.ledger)
+            joined = ingest.join_folder(self.library, self.ledger, local_date(time.time()), "import", plan.info.serial)
+            result = run_backup(source, self.cfg, self.ledger, "", plan=plan, folder=joined[0] if joined else None)
+        return Path(result.shoot_folder).name, joined
+
+    def test_the_second_camera_joins_and_the_next_game_starts_a_new_import(self):
+        d850, d500 = self.tmp / "d850", self.tmp / "d500"
+        make_card(d850, count=2, base_time=1_791_700_000)
+        make_card(d500, count=2, start=5000, base_time=1_791_700_100)
+        game1 = [self.two_camera_backup(d850), self.two_camera_backup(d500)]
+        self.assertEqual([g[0] for g in game1], [today_folder("import", 1)] * 2)
+        self.assertIsNone(game1[0][1])
+        self.assertIn("d850", game1[1][1][1])  # the copying screen says which camera it joins
+        make_card(d850, count=1, start=9000, base_time=1_791_700_000 + 3 * 3600)
+        make_card(d500, count=1, start=9500, base_time=1_791_700_100 + 3 * 3600)
+        game2 = [self.two_camera_backup(d850), self.two_camera_backup(d500)]
+        self.assertEqual([g[0] for g in game2], [today_folder("import", 2)] * 2)
+        files = sorted(p.name for p in (self.library / today_folder("import", 1)).iterdir() if p.is_file())
+        self.assertEqual(len([f for f in files if f.lower().endswith(".nef")]), 4)
+
+    def test_without_a_camera_identity_it_never_joins(self):
+        make_card(self.card, count=1)
+        self.backup(name="")
+        self.assertIsNone(ingest.join_folder(self.library, self.ledger, local_date(time.time()), "import", ""))
+
+
 class ShootNameTests(Base):
     def test_a_backup_without_a_name_is_an_import(self):
         make_card(self.card, count=3)

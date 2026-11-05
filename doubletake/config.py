@@ -63,6 +63,13 @@ DEFAULTS = {
     "viewer_zoom": 100,
     # The viewer's line of photo details on the photo: shown, or hidden with a tap.
     "viewer_info": True,
+    # Who took the photos: on the phone page, and in exported JPEGs (Artist, Copyright).
+    "owner_name": "",
+    "owner_website": "",
+    # Up to four more links on the phone page: [{"label": ..., "url": ...}].
+    "phone_links": [],
+    # Two cameras at one event: a camera not yet in today's latest import joins it.
+    "multi_camera": False,
     # The desktop's own lock and blanking settings, kept while Start at power-on is on.
     "desktop_saved": {},
 }

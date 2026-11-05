@@ -144,10 +144,12 @@ were not formatted in between, the records know what is already on the tablet, s
 folder holds only the new photos. A backup stopped part-way is carried on in its own
 folder.
 
-**Gaps in the numbers are normal.** A deleted shoot's number is not used again. Import three
-times in a day (`_01`, `_02`, `_03`), delete `_03`, and the next import that day is `_04`,
-not `_03`. So a folder already brought onto your editing workstation as `_03` is never
-mixed up with a different import, and the records never mix the two.
+**Two cameras at one event.** Turn on **Shoot with more than one camera** in Settings ›
+Backup rules. Then a camera that has no photos yet in the day's latest import joins it,
+and a camera that is already in it starts a new one. Back up the D850 after game 1
+(`_01`), then the D500 (it joins `_01`); after game 2 the D850 starts `_02` and the D500
+joins it. The copying screen says when it is adding to an import, and with which camera.
+P1 follows the same rule. Off (as it starts): every backup is an import of its own.
 
 To try the screens without a camera, point them at any folder of photos:
 
@@ -180,7 +182,7 @@ shoots from Copy 1 and Copy 2. It cannot be undone.
   are still on the camera's card, so they are not copied again. The Camera cards tile then
   says they are on neither copy.
 - Its number is not used again that day: after deleting `2026_1015_import_03`, the next
-  import is `_04`. See "Gaps in the numbers are normal" above.
+  import is `_04`.
 
 Safe to Format counts Copy 1 and Copy 2 only.
 
@@ -267,19 +269,35 @@ like. The NEF is never changed, and real editing is still done from it, on your 
 - **This photo**, or **All edited**: every edited photo in the shoot.
 
 Exports go to `~/Pictures/DoubleTake/Exports/<shoot>/`, apart from the shoots. They keep
-the camera model and the time the photo was taken. Exporting again replaces the earlier
+the camera model and the time the photo was taken. With your name set in Settings › Send
+to phone, each one also carries it as the Artist, and `Copyright 2026 <name>, <website>`
+as the Copyright. Exporting again replaces the earlier
 JPEG. Deleting a shoot never removes its exports.
 The **Exports** button in the shoot library (and in a shoot that has exports) shows them all.
 
 Getting them off the tablet:
 
+- **Choose which ones:** tap exports to tick them. The buttons then say **Send 3 to phone**
+  and **Copy 3 to USB**. With none ticked they take all of them. **Select all** and
+  **Clear** are at the top.
 - **Send to phone:** the tablet's hotspot comes on if it is not already, and the screen shows
   two QR codes. Scan the first with the phone's camera to join the hotspot, then the second
-  to open a page with the photos. On an iPhone, tap a photo, then press and hold it and
-  choose Save to Photos; on Android, tap Save. The page is reachable only over the hotspot,
-  its address holds a random code made fresh each time, it shows only the exports, and it
-  stops after 30 minutes or when you tap Stop sharing. While the hotspot is on, the tablet
-  is not on any other Wi-Fi network.
+  to open a page with the photos, the last exported first. Tap a photo to see it large,
+  with Previous and Next (or a swipe) and All photos to go back. On an iPhone, press and
+  hold the photo and choose Save to Photos (a download would go to Files, not Photos, so
+  iPhones are shown only this); on Android, tap Save.
+- **Keep sharing while you work:** tap **Done** and the box becomes a bar on the Exports
+  screen (Show codes, Stop). Tick more photos, or export more from the editor, and the
+  phone shows them within a few seconds, with no new codes to scan.
+- The page is reachable only over the hotspot, its address holds a random code made fresh
+  each time, it shows only the photos chosen, and it stops after 30 minutes or when you tap
+  Stop. While the hotspot is on, the tablet is not on any other Wi-Fi network. If Send to
+  phone turned the hotspot on, it turns it off again when sharing stops, and the tablet goes
+  back to its Wi-Fi. A hotspot you turned on yourself stays on.
+- **Your page:** Settings › Send to phone sets your name (the page reads "Photos from
+  <name>"), your website, a logo, and up to four link buttons. **Preview the phone page**
+  shows it as a phone will. The logo is kept on this tablet only: tap Choose and pick a PNG
+  or JPEG; a PNG with a see-through background looks best on the dark page.
 - **Copy to USB:** plug in a stick, choose it, and tap Copy. The exports go to a folder
   called `DoubleTake Exports` on it, each one read back and compared. Nothing else on
   the stick is touched. **Eject** before pulling it out.

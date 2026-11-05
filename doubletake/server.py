@@ -20,7 +20,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlparse
 
-from . import __version__, bluetooth, editor, naming, photos, settings
+from . import __version__, bluetooth, editor, naming, phone, photos, settings
 from . import kiosk as kiosk_session
 from .station import Station
 
@@ -124,6 +124,35 @@ def make_handler(station: Station, on_quit):
                     return self._jpeg(body)
             return self._file(found)
 
+        def _send_bytes(self, body: bytes, kind: str, extra=None):
+            self.send_response(200)
+            self.send_header("Content-Type", kind)
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Cache-Control", "no-store")
+            for k, v in (extra or {}).items():
+                self.send_header(k, v)
+            self.end_headers()
+            self.wfile.write(body)
+
+        def _phone_preview(self, path, query):
+            """/phone-preview/: the phone page as a phone would see it, for Settings."""
+            parts = [unquote(p) for p in path.split("/")[2:] if p]
+            share = station.phone_preview()
+            if not parts:
+                return self._send_bytes(share.page().encode("utf-8"), "text/html; charset=utf-8")
+            if parts == ["list.json"]:
+                return self._json(share.items())
+            if parts == ["ring.png"]:
+                return self._send_bytes(phone.DOUBLETAKE_RING.read_bytes(), "image/png")
+            if parts == ["doubletake.png"]:
+                return self._send_bytes(phone.DOUBLETAKE_LOGO.read_bytes(), "image/png")
+            if parts == ["logo.png"]:
+                body = share.logo_bytes()
+                return self._send_bytes(body, "image/png") if body else self._json({"error": "not found"}, 404)
+            if len(parts) == 3 and parts[0] in ("t", "f"):
+                return self._export("/export/" + "/".join(parts[1:]), {"t": ["thumb" if parts[0] == "t" else "full"]})
+            return self._json({"error": "not found"}, 404)
+
         def _local(self) -> bool:
             """Only answer a browser that is talking to this tablet by its local name."""
             host = (self.headers.get("Host") or "").split(":")[0]
@@ -174,6 +203,13 @@ def make_handler(station: Station, on_quit):
                 return self._json(station.rename_preview(item, (query.get("pattern") or [""])[0]))
             if url.path == "/api/exports":
                 return self._json(station.exports())
+            if url.path == "/api/settings/logo":
+                body = station.phone_logo_bytes()
+                if body is None:
+                    return self._json({"error": "not found"}, 404)
+                return self._send_bytes(body, "image/png")
+            if url.path.startswith("/phone-preview/"):
+                return self._phone_preview(url.path, query)
             if url.path.startswith("/export/"):
                 return self._export(url.path, query)
             if url.path.startswith("/photo/"):
@@ -191,6 +227,16 @@ def make_handler(station: Station, on_quit):
             # cannot press these buttons.
             if not self._local() or self.headers.get("X-DoubleTake") != "1":
                 return self._json({"error": "local only"}, 403)
+            if urlparse(self.path).path == "/api/settings/logo":
+                # The logo for the phone page: the picture itself, not JSON. Empty removes it.
+                try:
+                    length = int(self.headers.get("Content-Length") or 0)
+                except ValueError:
+                    length = -1
+                if not 0 <= length <= 60 * 1024 * 1024:
+                    return self._json({"ok": False, "error": "That picture is too big. Use one under 60 MB."})
+                error = station.set_phone_logo(self.rfile.read(length) if length else b"")
+                return self._json({"ok": not error, "error": error})
             try:
                 length = min(int(self.headers.get("Content-Length") or 0), 65536)
                 data = json.loads(self.rfile.read(length) or b"{}")
@@ -256,7 +302,12 @@ def make_handler(station: Station, on_quit):
                 done = station.phone_start(str(data.get("shoot") or ""))
                 return self._json(dict(done, ok=not done.get("error")))
             elif path == "/api/phone/stop":
-                station.phone_stop()
+                return self._json({"ok": True, "hotspot_off": station.phone_stop()})
+            elif path == "/api/phone/hotspot":
+                if not station.phone_hotspot():
+                    error = "Busy with the network. Try again in a moment."
+            elif path == "/api/phone/pick":
+                return self._json({"ok": True, "picked": station.phone_pick_set(data.get("items"))})
             elif path == "/api/usb":
                 return self._json({"drives": station.usb_drives()})
             elif path == "/api/usb/copy":

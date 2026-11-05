@@ -174,6 +174,10 @@ exit 0
 %ghost /usr/share/plymouth/themes/doubletake/doubletake.plymouth
 
 %changelog
+* Thu Nov 05 2026 DoubleTake <doubletake@users.noreply.github.com> - 1.0.4c-1
+- Send to phone: ticked photos, a live list, a better page with your name and logo
+- Artist and Copyright in exported JPEGs; two cameras in one import
+
 * Mon Oct 26 2026 DoubleTake <doubletake@users.noreply.github.com> - 1.0.3c-1
 - Start on the home screen begins the backup; the date in the viewer's line
 - The boot ring in the start-up logo's own shape; the backlight fades at start-up

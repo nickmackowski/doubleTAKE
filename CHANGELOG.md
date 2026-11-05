@@ -1,5 +1,23 @@
 # Changelog
 
+## 1.0.4c
+- **Choose what goes to the phone.** Tap exports to tick them; Send to phone and Copy to USB
+  take the ticked ones, or all of them when none are.
+- **Sharing keeps going while you work.** Done turns the box into a bar, and photos ticked
+  or exported meanwhile show on the phone within seconds, with no new codes.
+- **A better phone page:** the last exported first, each photo in its own shape, and a large
+  view with Previous, Next and All photos.
+- **Saving on an iPhone goes to Photos.** The page tells iPhones to press and hold the
+  photo and choose Save to Photos, rather than a download that lands in Files. Android
+  keeps its Save button. The DoubleTake icon, in the boot screen's turning ring, is at the
+  bottom of the page, and your website is a link.
+- **The hotspot goes back off.** When Send to phone turned the hotspot on, stopping the
+  share turns it off and the tablet rejoins its Wi-Fi. A hotspot turned on by hand stays on.
+- **Your name on it.** Settings › Send to phone: your name, website, logo and links on the
+  phone page; your name and website go into each exported JPEG as Artist and Copyright.
+- **Two cameras, one import.** Shoot with more than one camera (Backup rules): a second
+  camera's photos join the first one's import.
+
 ## 1.0.3c
 - **Start begins the backup.** Tapping Back up camera on the home screen starts copying
   straight away, as P1 does. If it cannot start (the tablet's battery too low off its

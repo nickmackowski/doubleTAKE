@@ -534,8 +534,18 @@
   <div class="grid-bar">
     <div id="ex-summary" class="body"></div>
     <div class="grow"></div>
-    <button id="ex-usb" class="btn" type="button">Copy to USB</button>
-    <button id="ex-phone" class="btn primary" type="button">Send to phone</button>
+    <button id="ex-all" class="btn" type="button">Select all</button>
+    <button id="ex-clear" class="btn" type="button" hidden>Clear</button>
+    <button id="ex-usb" class="btn" type="button">Copy all to USB</button>
+    <button id="ex-phone" class="btn primary" type="button">Send all to phone</button>
+  </div>
+  <div id="ex-sharing" class="ex-sharing" hidden>
+    <svg viewBox="0 0 24 24"><rect x="7" y="2" width="10" height="20" rx="2"/><path d="M11 18h2"/></svg>
+    <div id="ex-sharing-text" class="t"></div>
+    <div id="ex-sharing-sub" class="body"></div>
+    <div class="grow"></div>
+    <button id="ex-sharing-codes" class="btn" type="button">Show codes</button>
+    <button id="ex-sharing-stop" class="btn" type="button">Stop</button>
   </div>
   <div class="grid-wrap scroll">
     <div id="ex-empty" class="empty" hidden>No exports yet. Open a photo, tap Edit, then Export JPEG.</div>
@@ -631,8 +641,17 @@
     <div id="pm-status" class="body"></div>
     <div class="modal-actions">
       <button id="pm-close" class="btn big-btn" type="button">Stop sharing</button>
+      <button id="pm-hide" class="btn big-btn primary" type="button" hidden>Done</button>
       <button id="pm-hotspot" class="btn big-btn primary" type="button" hidden>Turn on hotspot</button>
     </div>
+  </div>
+</div>
+
+<div id="preview-modal" class="veil" hidden>
+  <div class="card modal pv">
+    <div class="pv-head"><div class="h1">The phone page</div><div class="grow"></div>
+      <button id="pv-close" class="btn big-btn" type="button">Close</button></div>
+    <div class="pv-phone"><iframe id="pv-frame" title="The phone page"></iframe></div>
   </div>
 </div>
 
@@ -661,6 +680,7 @@
       <button class="btn" type="button" data-sec="network"><svg viewBox="0 0 24 24"><path d="M2.5 9a13.5 13.5 0 0 1 19 0M5.5 12a9.2 9.2 0 0 1 13 0M8.5 15a5 5 0 0 1 7 0"/><circle cx="12" cy="18.5" r="1.2" fill="currentColor"/></svg>Network</button>
       <button class="btn" type="button" data-sec="bluetooth"><svg viewBox="0 0 24 24"><path d="M7 7l10 10-5 4V3l5 4L7 17"/></svg>Bluetooth</button>
       <button class="btn" type="button" data-sec="nas"><svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="7" rx="1"/><rect x="3" y="13" width="18" height="7" rx="1"/><path d="M7 7.5h.01M7 16.5h.01"/></svg>NAS</button>
+      <button class="btn" type="button" data-sec="phone"><svg viewBox="0 0 24 24"><rect x="7" y="2" width="10" height="20" rx="2"/><path d="M11 18h2"/></svg>Send to phone</button>
       <button class="btn" type="button" data-sec="rules"><svg viewBox="0 0 24 24"><path d="M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6z"/></svg>Backup rules</button>
       <button class="btn" type="button" data-sec="device"><svg viewBox="0 0 24 24"><rect x="6" y="2" width="12" height="20" rx="2"/><path d="M11 18h2"/></svg>Device</button>
       <div class="grow"></div>
@@ -898,6 +918,35 @@
       </div>
     </div>
 
+    <div class="panel scroll" data-panel="phone" hidden>
+      <div class="card">
+        <div class="setrow">
+          <div class="what"><div class="t">Your name</div><div id="set-owner-name" class="body"></div></div>
+          <button id="set-owner-name-edit" class="btn" type="button">Change</button>
+        </div>
+        <div class="setrow">
+          <div class="what"><div class="t">Website</div><div id="set-owner-site" class="body"></div></div>
+          <button id="set-owner-site-edit" class="btn" type="button">Change</button>
+        </div>
+        <div class="setrow">
+          <div class="what"><div class="t">Logo</div><div id="set-logo-text" class="body"></div>
+            <div id="set-logo-box" class="logo-box" hidden><img id="set-logo-img" alt=""></div></div>
+          <label class="btn" for="set-logo-file">Choose</label>
+          <input id="set-logo-file" type="file" accept="image/png,image/jpeg,image/webp" hidden>
+          <button id="set-logo-remove" class="btn" type="button" hidden>Remove</button>
+        </div>
+        <div class="setrow links-row">
+          <div class="what"><div class="t">Links</div><div class="body">Up to four buttons under your name, such as Instagram or a gallery.</div>
+            <div id="set-links" class="link-list"></div></div>
+          <button id="set-link-add" class="btn" type="button">Add a link</button>
+        </div>
+      </div>
+      <div class="setrow plain">
+        <div class="body grow">The phone page shows these. Your name and website also go into every exported JPEG, as its Artist and Copyright. Kept on this tablet only.</div>
+        <button id="set-phone-preview" class="btn" type="button">Preview the phone page</button>
+      </div>
+    </div>
+
     <div class="panel scroll" data-panel="rules" hidden>
       <div class="card">
         <div class="setrow">
@@ -911,6 +960,10 @@
         <div class="setrow">
           <div class="what"><div class="t">Backup beeps</div><div class="body">One beep as a backup starts, two when it is done, three low ones when it needs a look. Stopped by hand: no beep.</div></div>
           <button id="set-auto-chime" class="toggle" type="button"><span></span></button>
+        </div>
+        <div class="setrow">
+          <div class="what"><div class="t">Shoot with more than one camera</div><div class="body">On: the second camera's photos join the first camera's import, so one game is one folder. A camera already in the latest import starts a new one. Off: every backup is an import of its own.</div></div>
+          <button id="set-multi" class="toggle" type="button"><span></span></button>
         </div>
         <div class="setrow">
           <div class="what"><div class="t">What to copy</div><div id="set-copy-text" class="body"></div></div>

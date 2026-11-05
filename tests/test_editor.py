@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import io
+import json
 import os
 import sys
 import tempfile
@@ -207,6 +208,106 @@ class UsbTests(unittest.TestCase):
         self.assertEqual(usb._whole_disk("/dev/mmcblk0p1"), "")
 
 
+class OwnerTests(unittest.TestCase):
+    def test_artist_and_copyright(self):
+        tags = editor.owner_tags({"name": "Nick Maćkowski", "website": "https://nickm.com/"}, "2026:10:11 18:02:03")
+        self.assertEqual(tags, {0x013B: "Nick Mackowski", 0x8298: "Copyright 2026 Nick Mackowski, nickm.com"})
+        self.assertEqual(editor.owner_tags({"name": "Nick"}, ""), {0x013B: "Nick", 0x8298: f"Copyright {time.strftime('%Y')} Nick"})
+        self.assertEqual(editor.owner_tags({"website": "nickm.com"}), {})  # no name: nothing written
+
+    @unittest.skipUnless(HAVE_PIL, "needs Pillow")
+    def test_written_into_the_export(self):
+        from PIL import Image
+
+        d = Path(tempfile.mkdtemp(prefix="doubletake-owner-"))
+        src = d / "DSC_0001.jpg"
+        src.write_bytes(jpeg_bytes(300, 200))
+        out = d / "out.jpg"
+        editor.export(src, {}, out, owner={"name": "Nick Mackowski", "website": "nickm.com"})
+        with Image.open(out) as img:
+            exif = img.getexif()
+        self.assertEqual(exif.get(0x013B), "Nick Mackowski")
+        self.assertTrue(exif.get(0x8298).endswith("Nick Mackowski, nickm.com"))
+
+
+class LinkTests(unittest.TestCase):
+    def test_links_checked(self):
+        from doubletake import settings
+
+        cfg = {"library": tempfile.mkdtemp(prefix="doubletake-links-")}
+        with mock.patch("doubletake.config.save"):
+            self.assertEqual(settings.apply(cfg, {"phone_links": [{"label": "Instagram", "url": "instagram.com/nick"},
+                                                                  {"label": "", "url": ""}]}), "")
+            self.assertEqual(cfg["phone_links"], [{"label": "Instagram", "url": "instagram.com/nick"}])
+            self.assertIn("web address", settings.apply(cfg, {"phone_links": [{"label": "x", "url": "javascript:1"}]}))
+            self.assertIn("web address", settings.apply(cfg, {"owner_website": "not a site"}))
+            self.assertEqual(settings.apply(cfg, {"owner_name": "  Nick   Mackowski "}), "")
+            self.assertEqual(cfg["owner_name"], "Nick Mackowski")
+            many = [{"label": str(i), "url": f"a{i}.com"} for i in range(6)]
+            self.assertEqual(settings.apply(cfg, {"phone_links": many}), "")
+            self.assertEqual(len(cfg["phone_links"]), 4)
+
+    @unittest.skipUnless(HAVE_PIL, "needs Pillow")
+    def test_logo_kept_as_png(self):
+        from PIL import Image
+
+        from doubletake import settings
+
+        cfg = {"library": tempfile.mkdtemp(prefix="doubletake-logo-")}
+        self.assertIn("not a picture", settings.save_logo(cfg, b"nope"))
+        big = Image.new("RGBA", (4000, 600), (0, 0, 0, 0))
+        big.paste((255, 255, 255, 255), (100, 100, 3900, 500))
+        out = io.BytesIO()
+        big.save(out, "PNG")
+        self.assertEqual(settings.save_logo(cfg, out.getvalue()), "")
+        with Image.open(settings.phone_logo(cfg)) as img:
+            self.assertEqual(img.format, "PNG")
+            self.assertLessEqual(img.size[0], 1200)  # trimmed and made smaller
+            self.assertAlmostEqual(img.size[0] / img.size[1], 3800 / 400, delta=0.2)
+        self.assertEqual(settings.save_logo(cfg, b""), "")
+        self.assertFalse(settings.phone_logo(cfg).exists())
+
+
+class PhoneHotspotTests(unittest.TestCase):
+    """Send to phone turns the hotspot off when it stops only if it turned it on."""
+
+    def station(self, hotspot_on):
+        from doubletake.station import Station
+
+        st = Station.__new__(Station)
+        st.net = {"hotspot": hotspot_on}
+        st.phone_share = None
+        st.phone_owns_hotspot = False
+        st.calls = []
+        st.hotspot = lambda on: (st.calls.append(on), st.net.update(hotspot=on), True)[2]
+        return st
+
+    def test_turned_on_for_the_share_goes_off_with_it(self):
+        from doubletake.station import Station
+
+        st = self.station(False)
+        self.assertTrue(Station.phone_hotspot(st))
+        self.assertTrue(Station.phone_stop(st))
+        self.assertEqual(st.calls, [True, False])
+
+    def test_turned_on_by_hand_stays_on(self):
+        from doubletake.station import Station
+
+        st = self.station(True)
+        self.assertTrue(Station.phone_hotspot(st))
+        self.assertFalse(Station.phone_stop(st))
+        self.assertEqual(st.calls, [])
+
+    def test_a_restarted_share_keeps_it(self):
+        from doubletake.station import Station
+
+        st = self.station(False)
+        Station.phone_hotspot(st)
+        self.assertFalse(Station.phone_stop(st, keep_hotspot=True))
+        self.assertTrue(Station.phone_stop(st))
+        self.assertEqual(st.calls, [True, False])
+
+
 class PhoneTests(unittest.TestCase):
     def setUp(self):
         self.dir = Path(tempfile.mkdtemp(prefix="doubletake-phone-"))
@@ -232,14 +333,57 @@ class PhoneTests(unittest.TestCase):
         code, body, _ = self.get(f"/{self.share.token}/")
         self.assertEqual(code, 200)
         self.assertIn(b"DSC_4841.jpg", body)
-        self.assertEqual(self.get(f"/{self.share.token}/t/0.jpg")[0], 200)  # the thumbnail the page links to
-        code, body, headers = self.get(f"/{self.share.token}/f/0/DSC_4841.jpg?dl=1")
+        self.assertIn(b"Photos from DoubleTake", body)
+        base = f"/{self.share.token}"
+        self.assertEqual(self.get(f"{base}/t/2026-10-11_Ramp/DSC_4841.jpg")[0], 200)  # the thumbnail
+        code, body, headers = self.get(f"{base}/f/2026-10-11_Ramp/DSC_4841.jpg?v=1&dl=1")
         self.assertEqual((code, body), (200, self.photo.read_bytes()))
         self.assertIn("attachment", headers.get("Content-Disposition", ""))
         self.assertEqual(self.share.status()["served"], 1)
-        for path in ("/", "/wrongcode/", f"/{self.share.token}/f/1/x.jpg", f"/{self.share.token}/../secret.jpg",
-                     f"/{self.share.token}/x/0"):
+        self.assertEqual(self.get(f"{base}/doubletake.png")[0], 200)
+        self.assertEqual(self.get(f"{base}/ring.png")[0], 200)
+        for path in ("/", "/wrongcode/", f"{base}/f/2026-10-11_Ramp/x.jpg", f"{base}/../secret.jpg",
+                     f"{base}/f/2026-10-11_Ramp/secret.jpg", f"{base}/f/../secret.jpg", f"{base}/x/0",
+                     f"{base}/logo.png", "/wrongcode/list.json", "/wrongcode/doubletake.png"):
             self.assertEqual(self.get(path)[0], 404, path)
+
+    def test_the_list_follows_the_choice(self):
+        chosen = [("2026-10-11_Ramp", "DSC_4841.jpg", str(self.photo))]
+        share = phone.PhoneShare(lambda: list(chosen), "127.0.0.1", port=0)
+        share.start()
+        share.port = share._server.server_address[1]
+        self.addCleanup(share.stop)
+        url = f"http://127.0.0.1:{share.port}/{share.token}/"
+        with urllib.request.urlopen(url + "list.json", timeout=5) as reply:
+            self.assertEqual([p["n"] for p in json.loads(reply.read())], ["DSC_4841.jpg"])
+        second = self.dir / "DSC_4842.jpg"
+        second.write_bytes(self.photo.read_bytes())
+        chosen.insert(0, ("2026-10-11_Ramp", "DSC_4842.jpg", str(second)))  # exported, or ticked, since
+        with urllib.request.urlopen(url + "list.json", timeout=5) as reply:
+            items = json.loads(reply.read())
+        self.assertEqual([p["n"] for p in items], ["DSC_4842.jpg", "DSC_4841.jpg"])
+        if HAVE_PIL:
+            self.assertEqual((items[0]["w"], items[0]["h"]), (400, 300))  # tiles in the photo's own shape
+        chosen.pop()  # untick the first: the phone can no longer open it
+        with urllib.request.urlopen(url + "f/2026-10-11_Ramp/DSC_4842.jpg", timeout=5) as reply:
+            self.assertEqual(reply.status, 200)
+        with self.assertRaises(urllib.error.HTTPError):
+            urllib.request.urlopen(url + "f/2026-10-11_Ramp/DSC_4841.jpg", timeout=5)
+
+    def test_the_page_carries_the_name_logo_and_links(self):
+        page = phone.render_page([], {"name": "Nick <M>", "website": "nickm.com",
+                                      "links": [{"label": "Instagram", "url": "instagram.com/nick"},
+                                                {"label": "Bad", "url": "javascript:alert(1)"}]}, logo=True)
+        self.assertIn("Photos from Nick &lt;M&gt;", page)
+        self.assertIn('href="https://nickm.com"', page)
+        self.assertIn('href="https://instagram.com/nick">Instagram<', page)
+        self.assertNotIn("javascript:", page)
+        self.assertIn('src="logo.png"', page)
+        self.assertIn('src="doubletake.png"', page)
+        plain = phone.render_page([{"s": "a", "n": "</script><b>", "w": 3, "h": 2, "v": "1"}], {}, logo=False)
+        self.assertIn("Photos from DoubleTake", plain)
+        self.assertNotIn("</script><b>", plain)  # a name cannot end the page's script
+        self.assertNotIn('class="logo"', plain)
 
     def test_stops_when_time_is_up(self):
         self.share.until = time.time() - 1

@@ -265,7 +265,32 @@ def preview(source_jpeg: Path, p: dict, crop: bool = True, long_side: int = 1280
             return None
 
 
-def _exif(details: dict, width: int, height: int):
+def _plain(text: str) -> str:
+    """EXIF text is plain ASCII: accents dropped, anything else left out."""
+    import unicodedata
+
+    text = unicodedata.normalize("NFKD", text or "").encode("ascii", "ignore").decode("ascii")
+    return " ".join(text.split())
+
+
+def owner_tags(owner: dict | None, taken: str = "") -> dict:
+    """Artist and Copyright for an exported JPEG, from the name and website in Settings:
+    {0x013B: 'Nick Mackowski', 0x8298: 'Copyright 2026 Nick Mackowski, nickm.com'}."""
+    owner = owner or {}
+    name = _plain(owner.get("name") or "")
+    if not name:
+        return {}
+    site = _plain(owner.get("website") or "")
+    for start in ("https://", "http://"):
+        if site.lower().startswith(start):
+            site = site[len(start):]
+    site = site.rstrip("/")
+    year = taken[:4] if re.match(r"^\d{4}", taken or "") else time.strftime("%Y")
+    note = f"Copyright {year} {name}" + (f", {site}" if site else "")
+    return {0x013B: name, 0x8298: note}
+
+
+def _exif(details: dict, width: int, height: int, owner: dict | None = None):
     from PIL import Image
 
     exif = Image.Exif()
@@ -280,10 +305,13 @@ def _exif(details: dict, width: int, height: int):
     taken = details.get("taken", "")
     if re.match(r"^\d{4}:\d\d:\d\d \d\d:\d\d:\d\d", taken):
         exif[0x0132] = taken[:19]
+    for tag, value in owner_tags(owner, taken).items():
+        exif[tag] = value
     return exif, taken[:19] if taken else ""
 
 
-def export(photo_path: Path, p: dict, target: Path, size: str = "full", quality: str = "high") -> dict:
+def export(photo_path: Path, p: dict, target: Path, size: str = "full", quality: str = "high",
+           owner: dict | None = None) -> dict:
     """Make the JPEG. Written under a temporary name, then renamed. Returns its details."""
     long_side = SIZES.get(size, None)
     q = QUALITIES.get(quality, 92)
@@ -295,7 +323,7 @@ def export(photo_path: Path, p: dict, target: Path, size: str = "full", quality:
         img = photos._turn(img.convert("RGB"), orientation)
         img = apply(img, p, crop=True, size=long_side)
         details = photos.read_details(photo_path)
-        exif, taken = _exif(details, *img.size)
+        exif, taken = _exif(details, *img.size, owner=owner)
         target.parent.mkdir(parents=True, exist_ok=True)
         tmp = target.with_name(f".{target.name}.{threading.get_ident()}.part")
         save_args = {"quality": q, "optimize": True, "progressive": True, "subsampling": 0 if q >= 90 else 2}

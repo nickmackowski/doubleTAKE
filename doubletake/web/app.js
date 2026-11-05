@@ -1073,7 +1073,8 @@ function renderCopy() {
   setName("cp-model", c.model || "Camera", true);
   setText("cp-sub", reading
     ? (b.listed ? "Reading the cards: " + n(b.listed) + " files so far." : "Opening the camera.")
-    : "USB connected. " + n(b.total_files) + " new photos.");
+    : (b.joined ? "Adding to " + b.joined + ", with the " + b.joined_with + ". " : "USB connected. ") +
+      n(b.total_files) + " new photos.");
   setBattery("cp-batt", c);
   const unit = unitFor(b.total_bytes);
   setText("cp-files", n(b.done_files));
@@ -2168,9 +2169,42 @@ async function openExports(from) {
   await loadExports();
 }
 
+// Ticked exports: what Send to phone and Copy to USB take. None ticked: all of them.
+let exPicked = new Set();
+const exKey = (shoot, name) => shoot + "/" + name;
+
+function exLabels() {
+  const k = exPicked.size;
+  const count = exportsData ? exportsData.count : 0;
+  setText("ex-phone", k ? "Send " + n(k) + " to phone" : "Send all to phone");
+  setText("ex-usb", k ? "Copy " + n(k) + " to USB" : "Copy all to USB");
+  show("ex-clear", k > 0);
+  show("ex-all", count > 0 && k < count);
+  for (const box of document.querySelectorAll("#ex-list .thumb")) box.classList.toggle("on", exPicked.has(box.dataset.k));
+  renderSharing();
+}
+
+function exSendPick() {
+  post("/api/phone/pick", { items: [...exPicked].map((k) => { const i = k.indexOf("/"); return { shoot: k.slice(0, i), name: k.slice(i + 1) }; }) });
+}
+
+function exToggle(k) {
+  if (exPicked.has(k)) exPicked.delete(k); else exPicked.add(k);
+  exLabels();
+  exSendPick();
+}
+
+$("ex-all").addEventListener("click", () => {
+  if (!exportsData) return;
+  exPicked = new Set(exportsData.shoots.flatMap((s) => s.files.map((f) => exKey(s.shoot, f.name))));
+  exLabels(); exSendPick();
+});
+$("ex-clear").addEventListener("click", () => { exPicked.clear(); exLabels(); exSendPick(); });
+
 async function loadExports() {
   try { exportsData = await getJSON("/api/exports"); } catch (err) { return; }
   const d = exportsData;
+  exPicked = new Set((d.picked || []).map((p) => exKey(p.shoot, p.name)));
   setText("ex-summary", d.count ? n(d.count) + plural(d.count, " photo, ", " photos, ") + bytes(d.bytes) +
     ". Also in the NAS share, in the Exports folder." : "");
   show("ex-empty", !d.count);
@@ -2195,18 +2229,23 @@ async function loadExports() {
     const grid = document.createElement("div");
     grid.className = "thumbs";
     for (const f of s.files) {
-      const box = document.createElement("div");
+      const box = document.createElement("button");
+      box.type = "button";
       box.className = "thumb";
+      box.dataset.k = exKey(s.shoot, f.name);
       const img = document.createElement("img");
       img.loading = "lazy"; img.alt = ""; img.draggable = false;
       img.src = "/export/" + encodeURIComponent(s.shoot) + "/" + encodeURIComponent(f.name) + "?t=thumb&v=" + Math.round(f.time);
       const label = document.createElement("div"); label.className = "num"; label.textContent = frameNumber(f.name);
-      box.append(img, label);
+      const tick = document.createElement("div"); tick.className = "tick";
+      box.append(img, label, tick);
+      box.addEventListener("click", () => exToggle(box.dataset.k));
       grid.append(box);
     }
     sec.append(head, grid);
     return sec;
   }));
+  exLabels();
 }
 
 $("btn-exports").addEventListener("click", () => openExports("library"));
@@ -2225,7 +2264,7 @@ async function umLoad() {
 }
 
 function umRender() {
-  const count = exportsData ? exportsData.count : 0;
+  const count = exPicked.size || (exportsData ? exportsData.count : 0);
   setText("um-text", um.drives.length
     ? "Copies the " + n(count) + plural(count, " exported photo", " exported photos") + " to a folder called DoubleTake Exports, " +
       "each read back and checked. Nothing on the stick is removed."
@@ -2288,10 +2327,11 @@ let pm = { open: false, waiting: false, codes: null };
 
 async function pmStart() {
   const reply = await post("/api/phone/start", {});
-  if (!pm.open) { if (reply.ok) post("/api/phone/stop"); return; }
+  if (!pm.open) return;
   if (reply.need_hotspot) {
     pm.codes = null;
     show("pm-codes", false);
+    show("pm-hide", false);
     show("pm-hotspot", !pm.waiting);
     setText("pm-text", pm.waiting ? "Starting the hotspot..." :
       "The phone joins the tablet's own Wi-Fi hotspot to fetch the photos. While the hotspot is on, the tablet " +
@@ -2299,12 +2339,13 @@ async function pmStart() {
     if (pm.waiting) setTimeout(pmStart, 2000);
     return;
   }
-  if (reply.error) { setText("pm-text", reply.error); show("pm-codes", false); return; }
+  if (reply.error) { setText("pm-text", reply.error); show("pm-codes", false); show("pm-hide", false); return; }
   pm.waiting = false;
   pm.codes = reply;
   show("pm-hotspot", false);
-  setText("pm-text", "Scan the first code with the phone's camera to join the tablet's Wi-Fi, then the second to open the " +
-    n(reply.count) + plural(reply.count, " photo.", " photos."));
+  show("pm-hide", true);
+  setText("pm-text", "Scan the first code with the phone's camera to join the tablet's Wi-Fi, then the second to open the photos. " +
+    "Tap Done to keep sharing while you tick or export more: the phone shows them within a few seconds.");
   // As pictures, so the screens' own drawing styles cannot touch the codes.
   const qr = (id, svg) => {
     const img = document.createElement("img");
@@ -2318,33 +2359,77 @@ async function pmStart() {
   setText("pm-wifi", reply.wifi + "  /  " + reply.password);
   setText("pm-url", reply.url);
   show("pm-codes", true);
+  renderPhone();
+}
+
+function phoneLine(p) {
+  return (p.phones ? n(p.phones) + plural(p.phones, " phone", " phones") + " connected. " : "Waiting for the phone. ") +
+    (p.served ? n(p.served) + " of " + n(p.count) + " photos opened. " : "") + "Stops by itself in " + n(p.minutes_left) + " min.";
 }
 
 function renderPhone() {
+  renderSharing();
   if (!pm.open || !pm.codes) return;
   const p = S.phone || {};
-  if (!p.on) { setText("pm-status", "Sharing has stopped."); return; }
-  setText("pm-status", (p.phones ? n(p.phones) + plural(p.phones, " phone", " phones") + " connected. " : "Waiting for the phone. ") +
-    (p.served ? n(p.served) + " of " + n(p.count) + " photos opened. " : "") + "Stops by itself in " + n(p.minutes_left) + " min.");
+  if (!p.on) { setText("pm-status", "Sharing has stopped."); show("pm-hide", false); return; }
+  setText("pm-status", phoneLine(p));
 }
 
-$("ex-phone").addEventListener("click", () => {
+// While sharing, the Exports screen keeps a bar instead of the box, so photos can still be
+// ticked and exported.
+function renderSharing() {
+  const p = (S && S.phone) || {};
+  const on = !!p.on && !pm.open;
+  const note = !on && pm.note > Date.now();
+  show("ex-sharing", on || note);
+  show("ex-sharing-codes", on);
+  show("ex-sharing-stop", on);
+  $("ex-phone").disabled = !(exportsData && exportsData.count) || !!p.on;
+  if (note) {
+    setText("ex-sharing-text", "Sharing stopped");
+    setText("ex-sharing-sub", "The hotspot is off. The tablet is going back to its Wi-Fi.");
+  }
+  if (!on) return;
+  setText("ex-sharing-text", "Sharing to phone \u2022 " + n(p.count) + plural(p.count, " photo", " photos"));
+  setText("ex-sharing-sub", phoneLine(p));
+}
+
+function openPhoneBox() {
   pm.open = true; pm.waiting = false; pm.codes = null;
   setText("pm-text", "Starting..."); setText("pm-status", "");
-  show("pm-codes", false); show("pm-hotspot", false);
+  show("pm-codes", false); show("pm-hotspot", false); show("pm-hide", false);
   show("phone-modal", true);
+  renderSharing();
   pmStart();
-});
+}
+
+$("ex-phone").addEventListener("click", openPhoneBox);
+$("ex-sharing-codes").addEventListener("click", openPhoneBox);
+async function phoneStop() {
+  const reply = await post("/api/phone/stop");
+  if (reply && reply.hotspot_off) {
+    pm.note = Date.now() + 6000;
+    renderSharing();
+    setTimeout(renderSharing, 6100);
+  }
+}
+$("ex-sharing-stop").addEventListener("click", phoneStop);
 $("pm-hotspot").addEventListener("click", async () => {
   pm.waiting = true;
   show("pm-hotspot", false);
-  await post("/api/network/hotspot", { on: true });
+  await post("/api/phone/hotspot");  // off again when sharing stops
   setTimeout(pmStart, 3000);
+});
+$("pm-hide").addEventListener("click", () => {
+  pm.open = false;
+  show("phone-modal", false);
+  renderSharing();
 });
 $("pm-close").addEventListener("click", () => {
   pm.open = false; pm.codes = null;
-  post("/api/phone/stop");
+  phoneStop();
   show("phone-modal", false);
+  renderSharing();
 });
 
 // ----- photo names -----
@@ -2505,6 +2590,8 @@ function renderSettings() {
   toggle("set-auto", prefs.auto_backup);
   toggle("set-auto-dark", prefs.auto_dark);
   toggle("set-auto-chime", prefs.auto_chime);
+  toggle("set-multi", prefs.multi_camera);
+  renderPhoneSettings();
   segment("set-updates", prefs.update_days);
   loadFlicker();
   show("set-auto-dark-row", prefs.auto_backup);
@@ -2854,6 +2941,86 @@ for (const b of $("set-dark").children) b.addEventListener("click", () => change
 for (const b of $("set-sleep").children) b.addEventListener("click", () => change({ sleep_on_battery: Number(b.dataset.v) }));
 $("set-auto-dark").addEventListener("click", () => change({ auto_dark: !prefs.auto_dark }));
 $("set-auto-chime").addEventListener("click", () => change({ auto_chime: !prefs.auto_chime }));
+$("set-multi").addEventListener("click", () => change({ multi_camera: !prefs.multi_camera }));
+
+// ----- Settings: Send to phone (your name, website, logo and links) -----
+
+let logoStamp = 0;
+
+function renderPhoneSettings() {
+  setText("set-owner-name", prefs.owner_name || "Not set. The phone page says Photos from DoubleTake.");
+  setText("set-owner-site", prefs.owner_website || "Not set.");
+  show("set-logo-box", prefs.phone_logo);
+  show("set-logo-remove", prefs.phone_logo);
+  setText("set-logo-text", prefs.phone_logo ? "" : "Not set. A PNG with a see-through background looks best on the dark page.");
+  if (prefs.phone_logo) $("set-logo-img").src = "/api/settings/logo?v=" + logoStamp;
+  const links = prefs.phone_links || [];
+  rebuild("set-links", links.map((l, i) => Object.assign({ i: i }, l)), (l) => {
+    const row = document.createElement("div");
+    row.className = "link-item";
+    const t = document.createElement("div"); t.className = "t"; t.textContent = l.label;
+    const b = document.createElement("div"); b.className = "body muted grow"; b.textContent = l.url;
+    const edit = document.createElement("button"); edit.type = "button"; edit.className = "btn"; edit.textContent = "Change";
+    edit.addEventListener("click", () => editLink(l.i));
+    const del = document.createElement("button"); del.type = "button"; del.className = "btn"; del.textContent = "Remove";
+    del.addEventListener("click", () => change({ phone_links: links.filter((_, j) => j !== l.i) }));
+    row.append(t, b, edit, del);
+    return row;
+  });
+  $("set-link-add").disabled = links.length >= 4;
+}
+
+function editLink(i) {
+  const links = (prefs.phone_links || []).map((l) => Object.assign({}, l));
+  const was = i < links.length ? links[i] : { label: "", url: "" };
+  openKeyboard({
+    label: "Button label, such as Instagram", value: was.label, max: 30, any: true,
+    done: (label) => openKeyboard({
+      label: "Web address for " + (label.trim() || "the button"), value: was.url, max: 200, any: true,
+      hint: "Such as instagram.com/yourname",
+      done: (url) => {
+        if (!url.trim()) return;
+        const one = { label: label.trim(), url: url.trim() };
+        if (i < links.length) links[i] = one; else links.push(one);
+        change({ phone_links: links });
+      },
+    }),
+  });
+}
+
+$("set-owner-name-edit").addEventListener("click", () => openKeyboard({
+  label: "Your name, as on the phone page and in exported photos", value: prefs.owner_name, max: 80, any: true,
+  done: (name) => change({ owner_name: name.trim() }),
+}));
+$("set-owner-site-edit").addEventListener("click", () => openKeyboard({
+  label: "Your website", value: prefs.owner_website, max: 80, any: true, hint: "Such as yourname.com. Leave it empty for none.",
+  done: (site) => change({ owner_website: site.trim() }),
+}));
+$("set-link-add").addEventListener("click", () => editLink((prefs.phone_links || []).length));
+$("set-logo-file").addEventListener("change", async (e) => {
+  const file = e.target.files && e.target.files[0];
+  e.target.value = "";
+  if (!file) return;
+  setText("set-logo-text", "Saving...");
+  let reply;
+  try {
+    const r = await fetch("/api/settings/logo", { method: "POST", headers: { "X-DoubleTake": "1", "Content-Type": "application/octet-stream" }, body: file });
+    reply = await r.json();
+  } catch (err) { reply = { error: "It could not be saved." }; }
+  if (reply.error) await ask("Logo not saved", reply.error, "OK");
+  logoStamp = Date.now();
+  await loadSettings();
+});
+$("set-logo-remove").addEventListener("click", async () => {
+  if (!await ask("Remove the logo", "The phone page goes back to showing your name only.", "Remove")) return;
+  await fetch("/api/settings/logo", { method: "POST", headers: { "X-DoubleTake": "1" }, body: "" });
+  await loadSettings();
+});
+$("set-phone-preview").addEventListener("click", () => {
+  $("pv-frame").src = "/phone-preview/?v=" + Date.now();
+  show("preview-modal", true);
+});
+$("pv-close").addEventListener("click", () => { show("preview-modal", false); $("pv-frame").src = "about:blank"; });
 
 // The screen flicker fix: Intel graphics' Panel Self Refresh off, for every kernel.
 let flicker = {};

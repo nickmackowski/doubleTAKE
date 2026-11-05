@@ -182,6 +182,10 @@ only on the tablet; the second copy catches up when a card is put in.
   on the hotspot's address alone, serves only the exported JPEGs chosen for it, needs a
   random code in the address, and stops after 30 minutes. The helper opens its port in the
   hotspot's firewall zone for that time only, without saving it, and closes it again.
+  The list is read again on every request, so it follows the photos ticked on the Exports
+  screen as they change; a photo is addressed by its export folder and name, and is served
+  only while it is in that list. The page carries no outside links but the ones set in
+  Settings, checked as plain http or https addresses, and a strict content policy.
 - **The DoubleTake password** is kept only as a salted scrypt hash in
   `/etc/doubletake/password.json`, readable by root alone, and checked by the helper
   (`fs-password check`, the password on stdin). The engine asks it before the guarded

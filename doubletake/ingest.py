@@ -271,6 +271,29 @@ def next_shoot_folder(library, date: str, name: str, ledger=None) -> str:
     return stem + f"{max(numbers, default=0) + 1:02d}"
 
 
+def join_folder(library, ledger, date: str, name: str, serial: str):
+    """Two cameras at one event: the folder of today's latest import, when this camera has
+    no photos in it yet, so both cameras' photos go in one import. (folder, the other
+    cameras' names), or None for a new import as usual.
+
+    Game 1: the D850 makes _01, the D500 joins it. Game 2: the D850 is already in _01, so
+    it makes _02, and the D500 joins that."""
+    if not serial:
+        return None
+    stem = shoot_folder_for({}, date, name, 1)[:-2]
+    pick = re.compile(re.escape(stem) + r"(\d{2,})")
+    rows = [r for r in ledger.list_shoots() if pick.fullmatch(r["folder"] or "")]
+    if not rows:
+        return None
+    latest = max(rows, key=lambda r: int(pick.fullmatch(r["folder"]).group(1)))
+    if not (Path(library) / latest["folder"]).is_dir():
+        return None
+    cameras = ledger.shoot_cameras(latest["id"])
+    if not cameras or serial in [s for s, _ in cameras]:
+        return None
+    return latest["folder"], " and ".join(m or "another camera" for _, m in cameras)
+
+
 def run_backup(
     source: Source,
     cfg: dict,

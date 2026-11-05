@@ -776,3 +776,27 @@ svg[hidden] { display: none; }
 
 /* The version's closing c, in the accent colour */
 .ver-c { color: inherit; }  /* the c, in the same grey as the version */
+
+/* ----- 1.0.4c: ticking exports, the sharing bar, Settings > Send to phone ----- */
+.ex-shoot button.thumb { padding: 0; width: 100%; font: inherit; color: inherit; cursor: pointer; text-align: left; }
+.thumb .tick { position: absolute; right: .5rem; top: .5rem; width: 2.25rem; height: 2.25rem; border-radius: 50%; border: .1875rem solid #fff; background: rgba(0, 0, 0, .35); box-shadow: 0 0 0 .0625rem rgba(0, 0, 0, .4); }
+.thumb.on .tick { background: var(--orange); border-color: var(--orange); }
+.thumb.on .tick::after { content: ""; position: absolute; left: .62rem; top: .28rem; width: .5rem; height: 1rem; border: solid var(--on-accent); border-width: 0 .25rem .25rem 0; transform: rotate(45deg); }
+.ex-sharing { display: flex; align-items: center; gap: 1rem; margin: .75rem 1.5rem 0; padding: .75rem 1rem; border: .125rem solid var(--orange); border-radius: .375rem; background: var(--paper); }
+.ex-sharing svg { width: 2rem; height: 2rem; flex: none; fill: none; stroke: currentColor; stroke-width: 2; }
+.ex-sharing .t { font-size: 1.375rem; font-weight: 700; white-space: nowrap; }
+.ex-sharing .body { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.logo-box { margin-top: .625rem; display: inline-block; padding: .75rem 1rem; background: #16181b; border-radius: .375rem; }
+.logo-box img { display: block; max-height: 4rem; max-width: 28rem; }
+.link-list { display: flex; flex-direction: column; gap: .5rem; margin-top: .625rem; }
+.link-item { display: flex; align-items: center; gap: 1rem; }
+.link-item .t { font-size: 1.25rem; font-weight: 700; white-space: nowrap; }
+.link-item .body { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.links-row { align-items: flex-start; }
+.setrow.plain { padding: 1rem .25rem; }
+label.btn { display: inline-flex; align-items: center; justify-content: center; cursor: pointer; }
+.pv { width: auto; max-width: 96vw; max-height: 96vh; padding: 1.25rem 1.5rem; }
+.pv-head { display: flex; align-items: center; gap: 1rem; }
+.pv-phone { width: 24.375rem; height: min(46rem, calc(96vh - 9rem)); border: .5rem solid #000; border-radius: 1.75rem; overflow: hidden; background: #16181b; align-self: center; }
+.pv-phone iframe { width: 100%; height: 100%; border: 0; display: block; }
+:root[data-look="cockpit"] .ex-sharing { border-width: .0625rem; border-radius: .75rem; }

@@ -25,6 +25,64 @@ def screen_theme(cfg: dict) -> tuple[str, str]:
     theme = cfg.get("theme")
     return "classic", theme if theme in THEMES else "daylight"
 KEEP_DAYS = [7, 14, 30, 60, 90]
+MAX_LINKS = 4
+
+
+def phone_logo(cfg: dict) -> Path:
+    """The photographer's logo for the phone page. Kept on this tablet only."""
+    return config.data_dir(cfg) / "phone-logo.png"
+
+
+def web_address(text: str) -> str:
+    """A link as it can be opened: 'nickm.com' -> 'https://nickm.com'. '' when it is not one."""
+    text = (text or "").strip()
+    if not text or len(text) > 200 or any(c.isspace() or not c.isprintable() or c in '<>"\\' for c in text):
+        return ""
+    if "://" not in text:
+        text = "https://" + text
+    scheme, rest = text.split("://", 1)
+    host = rest.split("/", 1)[0]
+    if scheme.lower() not in ("http", "https") or "." not in host or host.startswith(".") or "@" in host:
+        return ""
+    return scheme.lower() + "://" + rest
+
+
+def save_logo(cfg: dict, data: bytes) -> str:
+    """Keep a logo for the phone page: any picture, made into a PNG no wider than 1200.
+    Returns why not, or ''."""
+    if not data:
+        target = phone_logo(cfg)
+        try:
+            target.unlink()
+        except FileNotFoundError:
+            pass
+        except OSError as exc:
+            return f"Could not remove it: {exc}"
+        return ""
+    try:
+        import io
+
+        from PIL import Image, ImageOps
+
+        Image.MAX_IMAGE_PIXELS = 120_000_000
+        img = Image.open(io.BytesIO(data))
+        img = ImageOps.exif_transpose(img)
+        img = img.convert("RGBA")
+        box = img.getbbox()  # trim empty edges
+        if box:
+            img = img.crop(box)
+        img.thumbnail((1200, 400))
+    except Exception:
+        return "That is not a picture it can read. Use a PNG or a JPEG."
+    target = phone_logo(cfg)
+    try:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        tmp = target.with_name(".phone-logo.part")
+        img.save(tmp, "PNG", optimize=True)
+        os.replace(tmp, target)
+    except OSError as exc:
+        return f"Could not keep it: {exc}"
+    return ""
 AUTOSTART = Path(os.path.expanduser("~/.config/autostart/doubletake.desktop"))
 
 
@@ -65,6 +123,11 @@ def public(cfg: dict) -> dict:
         "rename_tokens": naming.TOKENS,
         "viewer_zoom": int(cfg.get("viewer_zoom", 100)),
         "viewer_info": bool(cfg.get("viewer_info", True)),
+        "owner_name": cfg.get("owner_name") or "",
+        "owner_website": cfg.get("owner_website") or "",
+        "phone_links": [dict(link) for link in cfg.get("phone_links") or []][:MAX_LINKS],
+        "phone_logo": phone_logo(cfg).is_file(),
+        "multi_camera": bool(cfg.get("multi_camera", False)),
         "about": about(cfg),
     }
 
@@ -129,8 +192,28 @@ def apply(cfg: dict, changes: dict) -> str:
             clean[key] = value
         elif key == "viewer_zoom" and value in (50, 75, 100):
             clean[key] = value
-        elif key == "viewer_info" and isinstance(value, bool):
+        elif key in ("viewer_info", "multi_camera") and isinstance(value, bool):
             clean[key] = value
+        elif key in ("owner_name", "owner_website") and isinstance(value, str):
+            value = " ".join(value.split())
+            if len(value) > 80 or not value.isprintable():
+                return "That is too long." if len(value) > 80 else "That has a character it cannot keep."
+            if key == "owner_website" and value and not web_address(value):
+                return "That does not look like a web address."
+            clean[key] = value
+        elif key == "phone_links" and isinstance(value, list):
+            links = []
+            for link in value[:MAX_LINKS]:
+                if not isinstance(link, dict):
+                    return "Not a link."
+                label = " ".join(str(link.get("label") or "").split())[:30]
+                url = str(link.get("url") or "").strip()
+                if not label and not url:
+                    continue
+                if not web_address(url):
+                    return f"{label or 'That link'}: that does not look like a web address."
+                links.append({"label": label or web_address(url).split("//", 1)[1], "url": url})
+            clean[key] = links
         elif key == "start_at_login" and isinstance(value, bool):
             error = set_autostart(value)
             if error:

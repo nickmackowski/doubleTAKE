@@ -201,6 +201,18 @@ class Ledger:
         )
         self.db.commit()
 
+    def shoot_cameras(self, shoot_id: int) -> list:
+        """[(serial, model)] of the cameras that have photos in a shoot, first one first."""
+        out = []
+        row = self.shoot(shoot_id)
+        if row is not None and row["source_serial"]:
+            out.append((row["source_serial"], row["source_model"] or ""))
+        for r in self.db.execute("SELECT source_serial, source_model FROM runs WHERE shoot_id=? AND verified>0 "
+                                 "ORDER BY started", (shoot_id,)):
+            if r["source_serial"] and r["source_serial"] not in [s for s, _ in out]:
+                out.append((r["source_serial"], r["source_model"] or ""))
+        return out
+
     def shoot_files(self, shoot_id: int):
         return self.db.execute(
             "SELECT * FROM files WHERE shoot_id=? ORDER BY mtime, src_name, id", (shoot_id,)

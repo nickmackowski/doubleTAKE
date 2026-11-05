@@ -19,7 +19,7 @@ from contextlib import contextmanager
 from pathlib import Path
 
 from . import __version__, awake, bluetooth, cards, config, device, direct, editor, firstrun, kiosk, naming, screen, nas, network, phone, photos, power, poweron, retention, settings, usb
-from .ingest import BackupError, Reporter, copy_choice, coverage, make_plan, next_shoot_folder, run_backup, shoot_slug
+from .ingest import BackupError, Reporter, copy_choice, coverage, make_plan, join_folder, next_shoot_folder, run_backup, shoot_slug
 from .ledger import Ledger
 from .mirror import run_mirror
 from .sources import SourceError, open_source, source_present
@@ -148,6 +148,8 @@ class Station:
         self.net_job = {"busy": False, "message": "", "error": ""}
         self.bt_job = {"busy": False, "message": "", "error": ""}
         self.phone_share = None
+        self.phone_owns_hotspot = False  # Send to phone turned the hotspot on, so turns it off
+        self.phone_pick: list = []  # (shoot, name) ticked on the Exports screen
         self.direct = direct.DirectCable()
         self.direct_state = {"active": False, "device": "", "waiting": False, "error": ""}
         self.usb_job = {"busy": False, "done": 0, "total": 0, "current": "", "error": "", "message": "", "mount": ""}
@@ -505,7 +507,8 @@ class Station:
         problem = step("Stopping Copy 2 at a safe point" if mirror_was else "Checking Copy 2",
                        "Stopped Copy 2 at a safe point" if mirror_was else "Copy 2 is at rest", stop_mirror)
         if not problem and self.phone_share is not None:
-            problem = step("Closing the phone share", "Closed the phone share", self.phone_stop)
+            problem = step("Closing the phone share", "Closed the phone share",
+                           lambda: (self.phone_stop(), "")[1])
         if not problem:
             problem = step("Releasing the tablet keys", "Released the tablet keys", stop_keys)
         if not problem:
@@ -693,7 +696,10 @@ class Station:
         net["direct_waiting"] = self.direct_state.get("waiting", False)
         # A phone share ends with the hotspot, or when its time is up.
         if self.phone_share is not None and (not net.get("hotspot") or not self.phone_share.running()):
-            self.phone_stop()
+            if not net.get("hotspot"):
+                self.phone_owns_hotspot = False  # it is off already
+            self.net = dict(self.net or {}, hotspot=net.get("hotspot"))
+            self.phone_stop()  # out of time: the hotspot goes off too, if sharing turned it on
         # Everything else on the home screen is saved below whatever the NAS says: a NAS that
         # cannot be read must not blank the shoots or the batteries (as in 0.8.1).
         try:
@@ -833,8 +839,17 @@ class Station:
                     with self.lock:
                         job["nothing"] = True
                 else:
+                    # Two cameras at one event: the second joins the first one's import.
+                    joined = None
+                    if self.cfg.get("multi_camera"):
+                        joined = join_folder(self.library, ledger, local_date(time.time()), name,
+                                             plan.info.serial)
+                    if joined:
+                        with self.lock:
+                            job.update(joined=joined[0], joined_with=joined[1])
                     result = run_backup(source, self.cfg, ledger, name,
-                                        reporter=_Progress(self, job, self.stop_backup, source), plan=plan)
+                                        reporter=_Progress(self, job, self.stop_backup, source), plan=plan,
+                                        folder=joined[0] if joined else None)
                     try:
                         self._take_plan(make_plan(source, ledger, limit=self.limit, copy=copy_choice(self.cfg)))
                     except SourceError:
@@ -892,6 +907,11 @@ class Station:
     def folder_preview(self, name: str) -> str:
         """The folder the next backup with this name goes in: 2026_1015_import_01."""
         with self._ledger() as ledger:
+            if self.cfg.get("multi_camera"):
+                joined = join_folder(self.library, ledger, local_date(time.time()), name,
+                                     (self.camera or {}).get("serial") or "")
+                if joined:
+                    return joined[0]
             return next_shoot_folder(self.library, local_date(time.time()), name, ledger)
 
     # ----- the second copy ---------------------------------------------------------
@@ -1154,7 +1174,9 @@ class Station:
             path = self.library / row["shoot_folder"] / name
             try:
                 editor.export(path, editor.load(self.data_dir, row["id"]),
-                              editor.export_path(self.library, row["shoot_folder"], name), size, quality)
+                              editor.export_path(self.library, row["shoot_folder"], name), size, quality,
+                              owner={"name": self.cfg.get("owner_name") or "",
+                                     "website": self.cfg.get("owner_website") or ""})
                 made += 1
             except Exception as exc:
                 problems.append(f"{name}: {exc}")
@@ -1168,8 +1190,11 @@ class Station:
     def exports(self) -> dict:
         shoots = editor.list_exports(self.library)
         total = sum(f["size"] for s in shoots for f in s["files"])
+        have = {(s["shoot"], f["name"]) for s in shoots for f in s["files"]}
+        self.phone_pick = [p for p in self.phone_pick if p in have]
         return {"shoots": shoots, "count": sum(len(s["files"]) for s in shoots), "bytes": total,
-                "folder": str(editor.exports_dir(self.library))}
+                "folder": str(editor.exports_dir(self.library)),
+                "picked": [{"shoot": a, "name": b} for a, b in self.phone_pick]}
 
     def delete_export(self, shoot: str, name: str) -> str:
         names = [name] if name else [f["name"] for s in editor.list_exports(self.library) if s["shoot"] == shoot
@@ -1190,8 +1215,13 @@ class Station:
     # ----- exports to a phone, over the hotspot -------------------------------------
 
     def phone_start(self, shoot: str = "") -> dict:
-        """Start a phone share of the exports. Returns the two QR codes, or an error."""
-        files = self._export_files(shoot)
+        """Start a phone share of the exports, or show the one already going. Returns the two
+        QR codes, or an error. What the phone sees follows the photos ticked on the Exports
+        screen (all of them when none are), as they change."""
+        share = self.phone_share
+        if share is not None and share.running():
+            return self._phone_codes(share)
+        files = self.phone_files()
         if not files:
             return {"error": "There are no exports to send."}
         if not (self.net or {}).get("hotspot"):
@@ -1199,27 +1229,96 @@ class Station:
         spot = next((a for a in nas.addresses() if a["kind"] == "hotspot"), None)
         if spot is None:
             return {"error": "The hotspot has no address yet. Try again in a moment.", "need_hotspot": True}
-        self.phone_stop()
+        self.phone_stop(keep_hotspot=True)
         answer = nas.helper("phone-port", "on", spot["device"])
         if not answer.get("ok"):
             return {"error": "Could not open the hotspot for the phone: " + answer.get("error", "")}
         device = spot["device"]
-        share = phone.PhoneShare(files, spot["address"], on_stop=lambda: nas.helper("phone-port", "off", device))
+        share = phone.PhoneShare(self.phone_files, spot["address"],
+                                 on_stop=lambda: nas.helper("phone-port", "off", device),
+                                 brand=self._phone_brand, logo=settings.phone_logo(self.cfg))
         try:
             share.start()
         except OSError as exc:
             nas.helper("phone-port", "off", device)
             return {"error": f"Could not start the download page: {exc}"}
         self.phone_share = share
+        return self._phone_codes(share)
+
+    def _phone_codes(self, share) -> dict:
         name, password = self.hotspot_credentials()
-        return {"url": share.url, "wifi": name, "count": len(files),
+        return {"url": share.url, "wifi": name, "count": len(share.files()),
                 "qr_wifi": phone.qr_svg(phone.wifi_text(name, password)), "qr_url": phone.qr_svg(share.url),
                 "password": password}
 
-    def phone_stop(self) -> None:
+    def phone_preview(self):
+        """The phone page as it would be now, without starting anything, for Settings."""
+        return phone.PhoneShare(self.phone_files, "127.0.0.1",
+                                brand=self._phone_brand, logo=settings.phone_logo(self.cfg))
+
+    def _phone_brand(self) -> dict:
+        return {"name": self.cfg.get("owner_name") or "", "website": self.cfg.get("owner_website") or "",
+                "links": self.cfg.get("phone_links") or []}
+
+    def phone_logo_bytes(self):
+        try:
+            return settings.phone_logo(self.cfg).read_bytes()
+        except OSError:
+            return None
+
+    def set_phone_logo(self, data: bytes) -> str:
+        return settings.save_logo(self.cfg, data)
+
+    def phone_pick_set(self, items) -> int:
+        """The exports ticked on the Exports screen: what the phone page (and Copy to USB)
+        takes. None ticked: all of them. Returns how many are ticked."""
+        picked = []
+        for item in items if isinstance(items, list) else []:
+            if isinstance(item, dict):
+                pair = (str(item.get("shoot") or ""), str(item.get("name") or ""))
+                if editor.export_file(self.library, *pair) is not None and pair not in picked:
+                    picked.append(pair)
+        self.phone_pick = picked
+        return len(picked)
+
+    def phone_files(self) -> list:
+        """What is sent: the ticked exports, or all of them, the last exported first."""
+        files = self._export_files()
+        picked = set(getattr(self, "phone_pick", []) or [])
+        if picked:
+            chosen = [f for f in files if (f[0], f[1]) in picked]
+            if chosen:
+                files = chosen
+            else:
+                self.phone_pick = []  # the ticked ones have all been deleted
+
+        def exported(f):
+            try:
+                st = Path(f[2]).stat()
+                return (st.st_ctime, f[1])
+            except OSError:
+                return (0, f[1])
+        return sorted(files, key=exported, reverse=True)
+
+    def phone_hotspot(self) -> bool:
+        """Turn the hotspot on for a phone share. It goes off again when the share ends; a
+        hotspot that was already on, turned on by hand, is left as it is."""
+        if (self.net or {}).get("hotspot"):
+            return True
+        self.phone_owns_hotspot = True
+        return self.hotspot(True)
+
+    def phone_stop(self, keep_hotspot: bool = False) -> bool:
+        """Stop sharing. Returns True when the hotspot is being turned off with it."""
         share, self.phone_share = self.phone_share, None
         if share is not None:
             share.stop()
+        if keep_hotspot or not getattr(self, "phone_owns_hotspot", False):
+            return False
+        self.phone_owns_hotspot = False
+        if not (self.net or {}).get("hotspot"):
+            return False
+        return self.hotspot(False)  # back onto the Wi-Fi it was on
 
     # ----- exports to a USB stick ---------------------------------------------------
 
@@ -1241,7 +1340,7 @@ class Station:
         drive = next((d for d in self.usb_drives() if d["mount"] == mount), None)
         if drive is None:
             return "That USB stick is not plugged in."
-        files = self._export_files(shoot)
+        files = self._export_files(shoot) if shoot else self.phone_files()
         if not files:
             return "There are no exports to copy."
         with self.lock:
