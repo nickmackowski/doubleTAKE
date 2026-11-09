@@ -144,11 +144,19 @@ were not formatted in between, the records know what is already on the tablet, s
 folder holds only the new photos. A backup stopped part-way is carried on in its own
 folder.
 
+**Backing up again soon after.** When an import was made in the last 12 hours, Start asks
+where the photos go: one button for each of those imports (up to five, the latest first),
+and **New folder**. One tap starts the backup. Football half-time: tap the first half's
+import, and the game stays in one folder. A new game or a new family: New folder. After 12
+hours without a backup, Start does not ask, and a new folder is made. P1 and unattended
+backups never ask; they follow the rules below.
+
 **Two cameras at one event.** Turn on **Shoot with more than one camera** in Settings ›
 Backup rules. Then a camera that has no photos yet in the day's latest import joins it,
 and a camera that is already in it starts a new one. Back up the D850 after game 1
 (`_01`), then the D500 (it joins `_01`); after game 2 the D850 starts `_02` and the D500
-joins it. The copying screen says when it is adding to an import, and with which camera.
+joins it. The second camera goes in without asking. The copying screen says when it is adding to an
+import, and with which camera.
 P1 follows the same rule. Off (as it starts): every backup is an import of its own.
 
 To try the screens without a camera, point them at any folder of photos:
@@ -158,6 +166,10 @@ To try the screens without a camera, point them at any folder of photos:
 For a short test, limit how many photos each backup from the screens copies:
 
     doubletake gui --limit 50
+
+**Getting around:** ‹ at the top left goes back one screen. Deeper in (a shoot's photos,
+the viewer, the editor, Exports) « sits next to it and goes straight to the home screen.
+Edits are kept either way.
 
 ### Shoot library
 

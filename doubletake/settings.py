@@ -128,6 +128,7 @@ def public(cfg: dict) -> dict:
         "phone_links": [dict(link) for link in cfg.get("phone_links") or []][:MAX_LINKS],
         "phone_logo": phone_logo(cfg).is_file(),
         "multi_camera": bool(cfg.get("multi_camera", False)),
+        "welcome": bool(cfg.get("welcome", False)),
         "about": about(cfg),
     }
 
@@ -192,7 +193,7 @@ def apply(cfg: dict, changes: dict) -> str:
             clean[key] = value
         elif key == "viewer_zoom" and value in (50, 75, 100):
             clean[key] = value
-        elif key in ("viewer_info", "multi_camera") and isinstance(value, bool):
+        elif key in ("viewer_info", "multi_camera", "welcome") and isinstance(value, bool):
             clean[key] = value
         elif key in ("owner_name", "owner_website") and isinstance(value, str):
             value = " ".join(value.split())

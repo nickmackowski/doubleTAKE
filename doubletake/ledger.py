@@ -201,6 +201,15 @@ class Ledger:
         )
         self.db.commit()
 
+    def recent_shoots(self, since: float) -> list:
+        """Shoots with photos copied since then, the latest first: [(row, last copy time, photos)]."""
+        rows = self.db.execute(
+            "SELECT s.*, MAX(r.finished) AS last, "
+            " (SELECT COUNT(*) FROM files f WHERE f.shoot_id=s.id AND f.status='verified') AS photos "
+            "FROM runs r JOIN shoots s ON s.id=r.shoot_id WHERE r.verified>0 "
+            "GROUP BY s.id HAVING last>=? ORDER BY last DESC", (since,)).fetchall()
+        return rows
+
     def shoot_cameras(self, shoot_id: int) -> list:
         """[(serial, model)] of the cameras that have photos in a shoot, first one first."""
         out = []

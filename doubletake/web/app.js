@@ -635,6 +635,7 @@ function render() {
 
 function renderBar(v) {
   show("back", !!BACK[v]);
+  show("home", !!BACK[v] && BACK[v] !== "home");  // straight home, when that saves a tap
   show("bar-icon", v === "home");
   const titles = { home: "DoubleTake \u2022 " + (S.edition === "tron" ? "Two Replicas of Negatives" : "Field Station"), library: "Shoot library", settings: "Settings", exports: "Exports" };
   const inShoot = (v === "grid" || v === "viewer" || v === "editor") && shoot;
@@ -1073,7 +1074,7 @@ function renderCopy() {
   setName("cp-model", c.model || "Camera", true);
   setText("cp-sub", reading
     ? (b.listed ? "Reading the cards: " + n(b.listed) + " files so far." : "Opening the camera.")
-    : (b.joined ? "Adding to " + b.joined + ", with the " + b.joined_with + ". " : "USB connected. ") +
+    : (b.joined ? "Adding to " + b.joined + (b.joined_with ? ", with the " + b.joined_with : "") + ". " : "USB connected. ") +
       n(b.total_files) + " new photos.");
   setBattery("cp-batt", c);
   const unit = unitFor(b.total_bytes);
@@ -1259,10 +1260,52 @@ $("cam-ready").addEventListener("click", async () => {
          bytes(S.tablet.free) + " free. Delete shoots that are on both copies, in the shoot library.");
     return;
   }
-  const reply = await post("/api/backup/start", { name: "" });
-  if (reply.error) tell("The backup did not start", reply.error);
+  // Backed up in the last 12 hours: ask where these go. Otherwise start, as always.
+  let choices = { ask: false };
+  try { choices = await getJSON("/api/backup/choices"); } catch (err) {}
+  if (choices.ask) { openWhere(choices); return; }
+  startBackup(undefined);
 });
+
+async function startBackup(folder) {
+  show("where", false);
+  const body = { name: "" };
+  if (folder !== undefined) body.folder = folder;
+  const reply = await post("/api/backup/start", body);
+  if (reply.error) tell("The backup did not start", reply.error);
+}
+
+function openWhere(choices) {
+  const buttons = choices.choices.map((c) => {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = "btn where-pick";
+    const t = document.createElement("div"); t.className = "mono t"; t.textContent = c.folder;
+    const sub = document.createElement("div"); sub.className = "body";
+    sub.textContent = clockTime(c.time) + (c.cameras ? " \u2022 " + c.cameras : "") + " \u2022 " + n(c.photos) + plural(c.photos, " photo", " photos");
+    b.append(t, sub);
+    b.addEventListener("click", () => startBackup(c.folder));
+    return b;
+  });
+  const fresh = document.createElement("button");
+  fresh.type = "button";
+  fresh.className = "btn where-pick primary";
+  const t = document.createElement("div"); t.className = "t"; t.textContent = "New folder";
+  const sub = document.createElement("div"); sub.className = "body mono"; sub.textContent = choices.new;
+  fresh.append(t, sub);
+  fresh.addEventListener("click", () => startBackup(""));
+  buttons.push(fresh);
+  $("where-list").replaceChildren(...buttons);
+  show("where", true);
+}
+
+function clockTime(seconds) {
+  return new Date(seconds * 1000).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
+}
+
+$("where-cancel").addEventListener("click", () => show("where", false));
 $("back").addEventListener("click", () => go(BACK[shown] || "home"));
+$("home").addEventListener("click", () => go("home"));
 $("btn-scan").addEventListener("click", () => post("/api/camera/scan"));
 $("btn-rescan").addEventListener("click", () => post("/api/camera/scan"));
 $("btn-retry").addEventListener("click", () => post("/api/camera/scan"));
@@ -3450,14 +3493,15 @@ function wizLive() {
   wizRender();
 }
 
-async function openWizard() {
+async function openWizard(welcome) {
   if (!prefs) await loadSettings();
   if (!prefs) return;
-  wiz = { step: 0 };
+  wiz = { step: 0, welcome: welcome === true };
   show("wizard", true);
   wizRender();
 }
 async function closeWizard() {
+  if (wiz && wiz.welcome) change({ welcome: false });  // once only
   wiz = null;
   show("wizard", false);
   if (prefs && prefs.kiosk_on && !prefs.in_kiosk) {
@@ -3474,8 +3518,11 @@ function wizRender() {
     d.className = i === wiz.step ? "w-now" : i < wiz.step ? "w-past" : "";
     return d;
   }));
-  setText("wiz-title", step.title);
-  setText("wiz-lead", step.lead);
+  const hello = wiz.welcome && wiz.step === 0;
+  setText("wiz-title", hello ? "Welcome to DoubleTake" : step.title);
+  setText("wiz-lead", hello ? "DoubleTake is installed. A few choices, one page each, and the tablet is ready: the " +
+    "DoubleTake password, what to copy, Copy 2, the built-in NAS, the hotspot and how the tablet starts. " +
+    "Every one of them can be changed later in Settings." : step.lead);
   $("wiz-body").replaceChildren(...step.body());
   $("wiz-back").hidden = wiz.step === 0;
   setText("wiz-next", step.next || "Next");
@@ -3489,7 +3536,13 @@ $("wiz-next").addEventListener("click", async () => {
 });
 $("wiz-back").addEventListener("click", () => { if (wiz && wiz.step > 0) { wiz.step -= 1; wizRender(); } });
 $("wiz-skip").addEventListener("click", () => closeWizard());
-$("set-wizard").addEventListener("click", openWizard);
+$("set-wizard").addEventListener("click", () => openWizard());
+
+// Just installed with the DoubleTake installer: the walk-through opens by itself, once.
+(async () => {
+  try { await loadSettings(); } catch (err) { return; }
+  if (prefs && prefs.welcome) openWizard(true);
+})();
 
 
 // ===== the pop-up keyboard ============================================================

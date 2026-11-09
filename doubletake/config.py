@@ -70,6 +70,8 @@ DEFAULTS = {
     "phone_links": [],
     # Two cameras at one event: a camera not yet in today's latest import joins it.
     "multi_camera": False,
+    # Set by the DoubleTake installer's first start: open the setup walk-through once.
+    "welcome": False,
     # The desktop's own lock and blanking settings, kept while Start at power-on is on.
     "desktop_saved": {},
 }

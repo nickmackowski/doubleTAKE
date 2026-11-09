@@ -87,6 +87,34 @@ class StationTests(StationBase):
         self.station.dismiss()
         self.assertIsNone(self.station.state()["backup"])
 
+    def test_half_time_asks_where_and_adds_to_the_first_half(self):
+        self.station.start()
+        self.wait(lambda s: s["camera"]["state"] == "ready", "the camera to be read")
+        self.assertFalse(self.station.backup_choices()["ask"])  # the first backup of the day: no box
+        self.station.start_backup("")
+        first = self.wait(lambda s: s["backup"] and not s["backup"]["running"], "the first half")["backup"]
+        self.station.dismiss()
+        make_card(self.card, count=3, start=200)  # the second half
+        choices = self.station.backup_choices()
+        self.assertTrue(choices["ask"])
+        self.assertEqual([c["folder"] for c in choices["choices"]], [Path(first["folder"]).name])
+        self.assertEqual(choices["choices"][0]["photos"], 6)
+        self.assertTrue(choices["new"].endswith("_02"))
+        self.assertIn("not one of the recent", self.station.start_backup("", folder="2020_0101_import_01"))
+        self.station.scan()
+        self.wait(lambda s: s["camera"]["state"] == "ready" and s["camera"]["new"] == 3, "the new photos", 20)
+        self.assertEqual(self.station.start_backup("", folder=Path(first["folder"]).name), "")
+        second = self.wait(lambda s: s["backup"] and not s["backup"]["running"], "the second half")["backup"]
+        self.assertEqual(second["folder"], first["folder"])  # one game, one folder
+        self.assertEqual(second["joined_with"], "")  # the same camera: no 'with the ...'
+        self.station.dismiss()
+        make_card(self.card, count=1, start=400)
+        self.station.scan()
+        self.wait(lambda s: s["camera"]["state"] == "ready" and s["camera"]["new"] == 1, "the next game", 20)
+        self.assertEqual(self.station.start_backup("", folder=""), "")  # New folder
+        third = self.wait(lambda s: s["backup"] and not s["backup"]["running"], "the next game")["backup"]
+        self.assertTrue(third["folder"].endswith("_02"))
+
     def test_without_a_card_the_backup_still_runs_and_is_not_called_safe(self):
         self.cfg["second_copy"] = str(self.tmp / "nowhere")
         self.station.start()

@@ -693,6 +693,29 @@ def cmd_system_setup(args, cfg) -> int:
     return 0 if setupcli.system_step(cfg, alone=True) else 1
 
 
+def cmd_appliance_setup(args, cfg) -> int:
+    """The DoubleTake installer's first start: the user's part of setting up, with no
+    questions. Run by doubletake-firstboot as the tablet's user, once the helper's own part
+    (adopt) is done: start at power-on, and DoubleTake only. The rest of the questions are
+    the screens' own first-start pages."""
+    import getpass
+
+    from . import kiosk, poweron
+
+    config.write_defaults_if_missing()
+    problems = []
+    error = poweron.switch(cfg, True, getpass.getuser())
+    if error:
+        problems.append("start at power-on: " + error)
+    error = kiosk.switch(True)
+    if error:
+        problems.append("DoubleTake only: " + error)
+    config.save({"welcome": True})  # the screens open the setup walk-through, once
+    for problem in problems:
+        print(problem, file=sys.stderr)
+    return 1 if problems else 0
+
+
 def cmd_setup(args, cfg) -> int:
     """The setup questions, in the terminal."""
     from . import setupcli
@@ -827,6 +850,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser("system-setup", help="after installing the package: finish setting up the tablet")
     p.set_defaults(func=cmd_system_setup)
+
+    p = sub.add_parser("appliance-setup", help=argparse.SUPPRESS)
+    p.set_defaults(func=cmd_appliance_setup)
 
     p = sub.add_parser("setup", help="set up the tablet here in the terminal: the same questions as the screens")
     p.set_defaults(func=cmd_setup)

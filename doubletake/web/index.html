@@ -16,6 +16,9 @@
 <body>
 
 <header class="bar">
+  <button id="home" class="back" type="button" aria-label="Home" hidden>
+    <svg viewBox="0 0 24 24"><path d="M12 5l-7 7 7 7"/><path d="M19 5l-7 7 7 7"/></svg>
+  </button>
   <button id="back" class="back" type="button" aria-label="Back" hidden>
     <svg viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7"/></svg>
   </button>
@@ -1076,6 +1079,15 @@
 </div>
 
 <!-- ================================================================== CONFIRM -->
+<div id="where" class="veil" hidden>
+  <div class="card modal where">
+    <div class="h1">Put these photos in</div>
+    <div class="lead">You backed up in the last 12 hours. Add to one of those imports, or start a new folder.</div>
+    <div id="where-list" class="where-list"></div>
+    <div class="confirm-actions"><button id="where-cancel" class="btn big-btn" type="button">Cancel</button></div>
+  </div>
+</div>
+
 <div id="confirm" class="veil" hidden>
   <div class="card modal">
     <div id="confirm-title" class="h1"></div>

@@ -789,11 +789,41 @@ class Station:
         tablet = self.tablet or {}
         return power.problem(self.camera.get("battery"), tablet.get("battery"), bool(tablet.get("on_power")))
 
-    def start_backup(self, name: str) -> str:
-        """Start a backup. Returns why not, or ''."""
+    # A backup soon after another: add to a recent import, or start a new one?
+    RECENT_HOURS = 12
+    RECENT_MAX = 5
+
+    def backup_choices(self) -> dict:
+        """What Start asks. ask: show the box; choices: imports from the last 12 hours, up to
+        five, the latest first; new: the folder a new import would get. The second camera of
+        a two-camera event goes into the first one's import without asking."""
+        name = shoot_slug("")
+        with self._ledger() as ledger:
+            if self.cfg.get("multi_camera"):
+                joined = join_folder(self.library, ledger, local_date(time.time()), name,
+                                     (self.camera or {}).get("serial") or "")
+                if joined:
+                    return {"ask": False, "choices": [], "new": "", "joins": joined[0]}
+            choices = []
+            for row in ledger.recent_shoots(time.time() - self.RECENT_HOURS * 3600):
+                if not row["folder"] or not (Path(self.library) / row["folder"]).is_dir():
+                    continue
+                cameras = [m for _, m in ledger.shoot_cameras(row["id"])]
+                choices.append({"folder": row["folder"], "time": row["last"], "photos": row["photos"],
+                                "cameras": " + ".join(c for c in cameras if c)})
+                if len(choices) >= self.RECENT_MAX:
+                    break
+            new = next_shoot_folder(self.library, local_date(time.time()), name, ledger)
+        return {"ask": bool(choices), "choices": choices, "new": new, "joins": ""}
+
+    def start_backup(self, name: str, folder: str | None = None) -> str:
+        """Start a backup. Returns why not, or ''. folder: a recent import to add to, '' for a
+        new one; None (P1, unattended) for the usual rules."""
         problem = self.power_problem()
         if problem:
             return problem
+        if folder and folder not in [c["folder"] for c in self.backup_choices()["choices"]]:
+            return "That import is not one of the recent ones. Tap Start again."
         reader = self._camera_thread
         if reader is not None and reader.name == "camera-battery":
             reader.join(timeout=10)  # a quick look at the battery: let it finish
@@ -805,7 +835,7 @@ class Station:
             self.backup = dict(_new_job(), running=True, phase="reading", name=name, folder="", method="",
                                listed=0, interrupted=False, reason="", error="", nothing=False,
                                previews_ok=0, previews_bad=0, manifest="", started=time.time(),
-                               card_at_start=self.card.get("state"))
+                               card_at_start=self.card.get("state"), chosen=folder)
             self._camera_thread = threading.Thread(target=self._run_backup, args=(name,), name="backup",
                                                    daemon=True)
             self._camera_thread.start()
@@ -841,7 +871,13 @@ class Station:
                 else:
                     # Two cameras at one event: the second joins the first one's import.
                     joined = None
-                    if self.cfg.get("multi_camera"):
+                    chosen = job.get("chosen")
+                    if chosen:  # picked in the box: add to that import
+                        row = next((r for r in ledger.list_shoots() if r["folder"] == chosen), None)
+                        others = [m for serial, m in (ledger.shoot_cameras(row["id"]) if row else [])
+                                  if serial != plan.info.serial and m]
+                        joined = (chosen, " and ".join(others))  # '' when it is this camera's own
+                    elif chosen is None and self.cfg.get("multi_camera"):
                         joined = join_folder(self.library, ledger, local_date(time.time()), name,
                                              plan.info.serial)
                     if joined:

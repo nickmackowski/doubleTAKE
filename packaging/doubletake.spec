@@ -174,6 +174,10 @@ exit 0
 %ghost /usr/share/plymouth/themes/doubletake/doubletake.plymouth
 
 %changelog
+* Mon Nov 09 2026 DoubleTake <doubletake@users.noreply.github.com> - 1.0.5c-1
+- Straight home from any screen
+- Backing up soon after an import asks which folder the photos go in
+
 * Thu Nov 05 2026 DoubleTake <doubletake@users.noreply.github.com> - 1.0.4c-1
 - Send to phone: ticked photos, a live list, a better page with your name and logo
 - Artist and Copyright in exported JPEGs; two cameras in one import

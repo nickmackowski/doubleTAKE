@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.0.5c
+- **Straight home.** « next to the back button jumps to the home screen from a shoot, the
+  viewer, the editor or Exports, rather than four taps of ‹.
+- **Half-time stays in one folder.** Backing up within 12 hours of an import, Start asks
+  where the photos go: one of those imports, or a new folder. The second camera of a
+  two-camera event still joins on its own.
+
 ## 1.0.4c
 - **Choose what goes to the phone.** Tap exports to tick them; Send to phone and Copy to USB
   take the ticked ones, or all of them when none are.

@@ -65,6 +65,7 @@ svg { fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; 
 .bar-stat svg { width: 1.75rem; height: 1.75rem; }
 .back { width: 3.5rem; height: 3.5rem; margin-left: -.75rem; display: flex; align-items: center; justify-content: center; border: .125rem solid var(--on-bar); border-radius: .375rem; color: var(--on-bar); }
 .back svg { width: 2rem; height: 2rem; stroke-width: 2.5; }
+#home:not([hidden]) + .back { margin-left: 0; }  /* home sits first, back next to it */
 
 /* ----- shared pieces ----- */
 .view { display: none; flex: 1; min-height: 0; flex-direction: column; }
@@ -800,3 +801,11 @@ label.btn { display: inline-flex; align-items: center; justify-content: center; 
 .pv-phone { width: 24.375rem; height: min(46rem, calc(96vh - 9rem)); border: .5rem solid #000; border-radius: 1.75rem; overflow: hidden; background: #16181b; align-self: center; }
 .pv-phone iframe { width: 100%; height: 100%; border: 0; display: block; }
 :root[data-look="cockpit"] .ex-sharing { border-width: .0625rem; border-radius: .75rem; }
+
+/* ----- 1.0.5c: where a backup soon after another goes ----- */
+.where { width: 62rem; max-width: 94vw; }
+.where-list { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin-top: 1.25rem; }
+.where-pick { display: flex; flex-direction: column; align-items: flex-start; justify-content: center; gap: .375rem; min-height: 6.5rem; padding: 1rem 1.25rem; text-align: left; text-transform: none; letter-spacing: 0; }
+.where-pick .t { font-size: 1.5rem; font-weight: 700; }
+.where-pick .body { font-size: 1.125rem; opacity: .85; }
+.where-pick.primary .body { color: inherit; opacity: .75; }

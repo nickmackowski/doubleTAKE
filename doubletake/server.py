@@ -201,6 +201,8 @@ def make_handler(station: Station, on_quit):
                 except ValueError:
                     item = 0
                 return self._json(station.rename_preview(item, (query.get("pattern") or [""])[0]))
+            if url.path == "/api/backup/choices":
+                return self._json(station.backup_choices())
             if url.path == "/api/exports":
                 return self._json(station.exports())
             if url.path == "/api/settings/logo":
@@ -315,7 +317,9 @@ def make_handler(station: Station, on_quit):
             elif path == "/api/usb/eject":
                 error = station.usb_eject(str(data.get("mount") or ""))
             elif path == "/api/backup/start":
-                error = station.start_backup(str(data.get("name") or ""))
+                folder = data.get("folder")
+                error = station.start_backup(str(data.get("name") or ""),
+                                             folder=str(folder) if isinstance(folder, str) else None)
             elif path == "/api/backup/stop":
                 station.stop_backup_now()
             elif path == "/api/backup/dismiss":

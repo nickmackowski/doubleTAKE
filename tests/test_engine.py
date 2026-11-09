@@ -367,6 +367,14 @@ class TwoCameraTests(Base):
         files = sorted(p.name for p in (self.library / today_folder("import", 1)).iterdir() if p.is_file())
         self.assertEqual(len([f for f in files if f.lower().endswith(".nef")]), 4)
 
+    def test_recent_imports_for_the_box(self):
+        make_card(self.card, count=2)
+        self.backup(name="")
+        rows = self.ledger.recent_shoots(time.time() - 12 * 3600)
+        self.assertEqual([r["folder"] for r in rows], [today_folder("import", 1)])
+        self.assertEqual(rows[0]["photos"], 2)
+        self.assertEqual(self.ledger.recent_shoots(time.time() + 60), [])  # nothing newer than now
+
     def test_without_a_camera_identity_it_never_joins(self):
         make_card(self.card, count=1)
         self.backup(name="")
