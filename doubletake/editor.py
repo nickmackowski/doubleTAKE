@@ -112,6 +112,8 @@ def forget(data_dir, file_id: int) -> None:
         edits_path(data_dir, file_id).unlink()
     except OSError:
         pass
+    if turn_of(data_dir, file_id):
+        set_turn(data_dir, file_id, 0)
 
 
 def edited_ids(data_dir) -> set:
@@ -120,6 +122,72 @@ def edited_ids(data_dir) -> set:
         return {int(p.stem) for p in folder.glob("*.json") if p.stem.isdigit()}
     except OSError:
         return set()
+
+
+# ----- Rotate: a turn kept beside the edits, never written into the photo -----------------
+# Clockwise degrees (0, 90, 180, 270) by file id, in one small file. Kept apart from the edits
+# so Reset (back to the original look) does not undo a photo turned the right way up.
+
+_turns_lock = threading.Lock()
+
+
+def _turns_path(data_dir) -> Path:
+    return Path(data_dir) / "turns.json"
+
+
+def turns(data_dir) -> dict:
+    try:
+        found = json.loads(_turns_path(data_dir).read_text())
+    except (OSError, ValueError):
+        return {}
+    if not isinstance(found, dict):
+        return {}
+    return {int(k): int(v) % 360 for k, v in found.items()
+            if str(k).isdigit() and isinstance(v, int) and int(v) % 90 == 0 and int(v) % 360}
+
+
+def turn_of(data_dir, file_id: int) -> int:
+    return turns(data_dir).get(int(file_id), 0)
+
+
+def turn_box(box, times: int = 1):
+    """A crop box [x0, y0, x1, y1] (fractions) as it falls once the photo is turned 90°
+    clockwise, 'times' times."""
+    if not box:
+        return box
+    x0, y0, x1, y1 = box
+    for _ in range(times % 4):
+        x0, y0, x1, y1 = 1 - y1, x0, 1 - y0, x1
+    return [round(x0, 5), round(y0, 5), round(x1, 5), round(y1, 5)]
+
+
+def set_turn(data_dir, file_id: int, degrees: int) -> int:
+    """Keep the turn for one photo (0 removes it). Returns it."""
+    degrees = int(degrees) % 360
+    if degrees % 90:
+        degrees = 0
+    with _turns_lock:
+        found = turns(data_dir)
+        if degrees:
+            found[int(file_id)] = degrees
+        else:
+            found.pop(int(file_id), None)
+        path = _turns_path(data_dir)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_name(f".{path.name}.{threading.get_ident()}.tmp")
+        tmp.write_text(json.dumps({str(k): v for k, v in sorted(found.items())}))
+        os.replace(tmp, path)
+    return degrees
+
+
+def turn_once(data_dir, file_id: int) -> int:
+    """The Rotate button: 90° more clockwise. A crop already set turns with the photo."""
+    degrees = set_turn(data_dir, file_id, turn_of(data_dir, file_id) + 90)
+    params = load(data_dir, file_id)
+    if params.get("crop"):
+        params["crop"] = turn_box(params["crop"])
+        save(data_dir, file_id, params)
+    return degrees
 
 
 def exports_dir(library) -> Path:
@@ -311,7 +379,7 @@ def _exif(details: dict, width: int, height: int, owner: dict | None = None):
 
 
 def export(photo_path: Path, p: dict, target: Path, size: str = "full", quality: str = "high",
-           owner: dict | None = None) -> dict:
+           owner: dict | None = None, turn: int = 0) -> dict:
     """Make the JPEG. Written under a temporary name, then renamed. Returns its details."""
     long_side = SIZES.get(size, None)
     q = QUALITIES.get(quality, 92)
@@ -320,7 +388,7 @@ def export(photo_path: Path, p: dict, target: Path, size: str = "full", quality:
         img, orientation = photos._open(photo_path)
         if img is None:
             raise ValueError("This photo has no picture inside it to export.")
-        img = photos._turn(img.convert("RGB"), orientation)
+        img = photos._turn(img.convert("RGB"), orientation, turn)
         img = apply(img, p, crop=True, size=long_side)
         details = photos.read_details(photo_path)
         exif, taken = _exif(details, *img.size, owner=owner)

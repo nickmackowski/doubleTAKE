@@ -114,6 +114,55 @@ class StationTests(StationBase):
         self.assertEqual(self.station.start_backup("", folder=""), "")  # New folder
         third = self.wait(lambda s: s["backup"] and not s["backup"]["running"], "the next game")["backup"]
         self.assertTrue(third["folder"].endswith("_02"))
+        # The box lists them in the order they were made, so New folder follows the newest
+        # (Nick 2026-11-25: "1-5 then new folder"), even though _01 was added to last-but-one.
+        self.station.dismiss()
+        make_card(self.card, count=1, start=500)
+        choices = self.station.backup_choices()
+        self.assertEqual([c["folder"] for c in choices["choices"]],
+                         [Path(first["folder"]).name, Path(third["folder"]).name])
+        self.assertTrue(choices["new"].endswith("_03"))
+        self.assertNotIn("_made", choices["choices"][0])
+
+    def test_rotate_turns_the_photo_in_doubletake_only(self):
+        """Nick 2026-11-27: an Insta360 photo shows sideways; Rotate turns it, the file stays."""
+        self.station.start()
+        self.wait(lambda s: s["camera"]["state"] == "ready", "the camera to be read")
+        self.station.start_backup("")
+        done = self.wait(lambda s: s["backup"] and not s["backup"]["running"], "the backup")["backup"]
+        shoot = self.station.library_view()["shoots"][0]
+        first = self.station.shoot_photos(shoot["id"])["files"][0]
+        self.assertEqual(first["turn"], 0)
+        path = Path(done["folder"]) / first["name"]
+        before = path.read_bytes()
+        self.station.edit_save(first["id"], {"crop": [0.1, 0.2, 0.5, 0.6]})
+        reply = self.station.turn_photo(first["id"])
+        self.assertEqual(reply["turn"], 90)
+        self.assertEqual(reply["params"]["crop"], [0.4, 0.1, 0.8, 0.5])
+        self.assertEqual(self.station.shoot_photos(shoot["id"])["files"][0]["turn"], 90)
+        self.assertEqual(path.read_bytes(), before)  # the checksums on both copies still match
+        self.assertIn("error", self.station.turn_photo(999999))
+
+    def test_a_stopped_import_in_the_box_and_new_folder_is_really_new(self):
+        """Nick, 2026-11-17: the box showed 2026_1117_import_01 twice, as the stopped import
+        and as New folder."""
+        self.station.start()
+        self.wait(lambda s: s["camera"]["state"] == "ready", "the camera to be read")
+        self.station.start_backup("")
+        first = self.wait(lambda s: s["backup"] and not s["backup"]["running"], "the first import")["backup"]
+        self.station.dismiss()
+        incoming = Path(first["folder"]) / ".incoming"
+        incoming.mkdir(exist_ok=True)
+        (incoming / "stopped").touch()  # as a backup stopped part-way leaves it
+        make_card(self.card, count=2, start=300)
+        choices = self.station.backup_choices()
+        self.assertEqual([c["folder"] for c in choices["choices"]], [Path(first["folder"]).name])
+        self.assertTrue(choices["new"].endswith("_02"))
+        self.station.scan()
+        self.wait(lambda s: s["camera"]["state"] == "ready" and s["camera"]["new"] == 2, "the new photos", 20)
+        self.assertEqual(self.station.start_backup("", folder=""), "")  # New folder
+        second = self.wait(lambda s: s["backup"] and not s["backup"]["running"], "the new import")["backup"]
+        self.assertTrue(second["folder"].endswith("_02"))
 
     def test_without_a_card_the_backup_still_runs_and_is_not_called_safe(self):
         self.cfg["second_copy"] = str(self.tmp / "nowhere")

@@ -25,9 +25,12 @@ ring.base = Image("ring.png");
 icon.image = Image("icon.png");
 title.image = Image("wordmark" + edition + ".png");
 
-# Laid out as drawn: the ring 366 high, the name 410 below its top. With the firmware's logo:
-# the ring the size of that logo, centred where it was. Without: all of it at most 45% of the
-# screen's height, centred, so a small screen still shows everything.
+# Laid out as drawn: the ring 366 high, the name 410 below its top. With a round firmware
+# logo (the Dells'): the ring the size of that logo, centred where it was. With a wide one
+# (the Panasonic FZ-M1's word, about 680 wide: followed, the ring filled two thirds of the
+# screen): the ring half the screen's height, all of it centred on the screen (Nick's choice,
+# 2026-11-23); the firmware's logo still fades out where it was. Without one: all of it at
+# most 45% of the screen's height, centred, so a small screen still shows everything.
 scale = 1;
 round_logo = 0;
 if (handoff) {
@@ -45,7 +48,17 @@ if (handoff) {
         side = (bgrt_w + bgrt_h) / 2;
         round_logo = 1;
     }
+}
+wide_logo = 0;
+if (handoff) {
+    if (round_logo == 0) {
+        wide_logo = 1;
+    }
+}
+if (round_logo) {
     scale = side / 366;
+} else if (wide_logo) {
+    scale = Window.GetHeight() * 0.5 / 366;
 } else if (514 > Window.GetHeight() * 0.45) {
     scale = Window.GetHeight() * 0.45 / 514;
 }
@@ -59,9 +72,12 @@ title.image = title.image.Scale(title.w, title.h);
 
 logo.w = ring.size;
 logo.h = Math.Int(514 * scale);
-if (handoff) {
+if (round_logo) {
     logo.x = Window.GetX() + bgrt_x + bgrt_w / 2 - logo.w / 2;
     logo.y = Window.GetY() + bgrt_y + bgrt_h / 2 - ring.size / 2;
+} else if (wide_logo) {
+    logo.x = Window.GetX() + Window.GetWidth() / 2 - logo.w / 2;
+    logo.y = Window.GetY() + Window.GetHeight() / 2 - logo.h / 2;
 } else {
     logo.x = Window.GetX() + Window.GetWidth() / 2 - logo.w / 2;
     logo.y = Window.GetY() + Window.GetHeight() * 0.45 - logo.h / 2;

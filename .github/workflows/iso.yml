@@ -1,0 +1,119 @@
+# Builds the DoubleTake installer ISO: the el9 package, laid into Rocky Linux's own boot
+# image with the DoubleTake kickstart and look (iso/build-iso.sh), checked against Rocky's
+# published checksum first.
+#
+# The package, the ISO and its SHA256SUMS go up as a pre-release on this repo's Releases page
+# ("iso-1.1.2c-rc3"), not as Actions downloads: the private repo's Actions storage is far too
+# small for a 1.4 GB ISO (the builds of 2026-11-19 to -22 stopped on "storage quota"). Old
+# test pre-releases are deleted by hand on the Releases page (Nick, 2026-11-22: fine, as long
+# as it stays on the private repo).
+#
+# Runs on a push to the iso-build branch (test builds, as pre-releases), by hand from the
+# Actions tab, or on a version tag (a release, v1.1.2c): then the ISO and SHA256SUMS-iso go
+# onto that tag's own release, beside the packages that build.yml puts there.
+name: Build installer ISO
+
+on:
+  push:
+    branches: ["iso-build"]
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  ROCKY: "9.9"
+  GH_TOKEN: ${{ github.token }}
+
+jobs:
+  package:
+    runs-on: ubuntu-24.04
+    outputs:
+      tag: ${{ steps.name.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Tools
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q rpm python3-pip python3-pil
+      - name: Tests
+        # Once more if a timing test trips on GitHub's slower computers; a real failure fails twice.
+        run: python3 -m unittest discover -s tests -q || python3 -m unittest discover -s tests -q
+      - name: The el9 package
+        run: DT_TARGETS="el9" bash packaging/build-rpm.sh dist
+      - name: The package, for the release's ISO
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: actions/upload-artifact@v4
+        with:
+          name: el9-package
+          path: dist/doubletake-*.el9.*.rpm
+          retention-days: 2
+      - name: The pre-release
+        id: name
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            echo "tag=$GITHUB_REF_NAME" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          version=$(python3 -c "import doubletake; print(doubletake.__version__)")
+          tag="iso-${version//\~/-}"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          gh release delete "$tag" --yes --cleanup-tag -R "$GITHUB_REPOSITORY" 2>/dev/null || true
+          gh release create "$tag" -R "$GITHUB_REPOSITORY" --prerelease --target "$GITHUB_SHA" \
+            --title "DoubleTake $version (test build)" \
+            --notes "A test build of DoubleTake $version: the installer ISO (with its SHA256SUMS) and the el9 package. Not a release." \
+            dist/doubletake-*.el9.*.rpm
+
+  iso:
+    needs: package
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: The package, from the release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: actions/download-artifact@v4
+        with:
+          name: el9-package
+          path: iso
+      - name: The package, from the pre-release
+        if: ${{ !startsWith(github.ref, 'refs/tags/v') }}
+        run: gh release download "${{ needs.package.outputs.tag }}" -R "$GITHUB_REPOSITORY" -p "doubletake-*.el9.*.rpm" -D iso
+      - name: Rocky's boot image, checked
+        run: |
+          mkdir -p work
+          # Rocky re-spins a release now and then (9.9 on 2026-11-18). The plain name
+          # (Rocky-9.9-x86_64-boot.iso) is a link that mirrors and caches can serve stale or
+          # broken (it would not match on 2026-11-22), so take the newest dated file named in
+          # Rocky's CHECKSUM, and check it against that same CHECKSUM.
+          for base in https://download.rockylinux.org https://dl.rockylinux.org https://download.rockylinux.org; do
+            url="$base/pub/rocky/${ROCKY}/isos/x86_64"
+            curl -fsSL --retry 3 -o work/CHECKSUM "$url/CHECKSUM" || continue
+            dated=$(grep -oE "Rocky-${ROCKY}-[0-9]{8}\.[0-9]+-x86_64-boot\.iso" work/CHECKSUM | sort -u | tail -1)
+            [ -n "$dated" ] || continue
+            echo "Rocky's boot image: $dated"
+            curl -fsSL --retry 3 -o "work/$dated" "$url/$dated" || continue
+            if (cd work && grep -F "($dated)" CHECKSUM | sha256sum -c -); then
+              mv "work/$dated" "work/Rocky-${ROCKY}-x86_64-boot.iso"
+              exit 0
+            fi
+            echo "Checksum did not match from $base; trying again."
+            rm -f "work/$dated"; sleep 20
+          done
+          exit 1
+      - name: The installer (in Rocky's own container)
+        run: |
+          docker run --rm --privileged -e ROCKY -v "$PWD:/w" -w /w rockylinux:9 bash -c '
+            dnf install -y -q lorax xorriso cpio rpm gzip findutils &&
+            ls iso/doubletake-*.rpm &&
+            bash iso/build-iso.sh "work/Rocky-${ROCKY}-x86_64-boot.iso"'
+          sudo chown -R "$(id -u):$(id -g)" work
+          cd work
+          sha256sum doubletake-*-installer.iso > SHA256SUMS-iso
+          cat SHA256SUMS-iso
+      - name: Onto the release
+        run: |
+          tag="${{ needs.package.outputs.tag }}"
+          gh release view "$tag" -R "$GITHUB_REPOSITORY" >/dev/null 2>&1 ||
+            gh release create "$tag" -R "$GITHUB_REPOSITORY" --draft --title "DoubleTake ${tag#v}" --notes "See CHANGELOG.md."
+          gh release upload "$tag" -R "$GITHUB_REPOSITORY" work/doubletake-*-installer.iso work/SHA256SUMS-iso --clobber

@@ -12,6 +12,12 @@ import shutil
 import subprocess
 
 
+def _die_with_parent() -> None:
+    from .powerctl import _die_with_parent as die
+
+    die()
+
+
 class StayAwake:
     def __init__(self, start=None):
         self._proc = None
@@ -24,7 +30,8 @@ class StayAwake:
             return None
         return subprocess.Popen([exe, "--what=sleep", "--who=DoubleTake", "--why=Copying photos",
                                  "--mode=block", "sleep", "86400"],
-                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL)
+                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL,
+                                preexec_fn=_die_with_parent)
 
     @property
     def holding(self) -> bool:

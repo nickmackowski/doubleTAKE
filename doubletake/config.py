@@ -31,6 +31,8 @@ DEFAULTS = {
     "theme": "daylight",
     "screen_dark_after": 5,       # minutes with no touch before the screen goes dark; 0 never
     "sleep_on_battery": 30,       # minutes with no touch before the tablet sleeps on battery; 0 never
+    "sleep_on_charger": 60,       # the same, on the charger (1.1.2c); 0 never
+    "power_button": "sleep",      # what the power button does in DoubleTake: "sleep" or "off"
     "auto_backup": False,         # back up as soon as the camera is plugged in
     "auto_dark": True,            # darken the screen between unattended backups
     "auto_chime": True,           # a short chime when an unattended backup is done

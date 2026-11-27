@@ -7,7 +7,10 @@ listens to it and hands each press to the station:
   P2  night red on and off, in the look in use
   P3  the tablet's status: version, photos on Copy 1 and Copy 2, the batteries
 
-and the screen's brightness keys, which in DoubleTake only reach no desktop handler.
+and the screen's brightness keys, which in DoubleTake only reach no desktop handler, and the
+power button (sleep or turn off, as Settings says; see powerctl). On the 7212 also its
+Windows button (a short press: the Home screen; held 2 seconds: the screen off) and its
+rotate button (the brightness in 25% steps, up to full and back down: it has no brightness keys).
 
 On a tablet without these keys the helper says so and stops, and nothing more is tried.
 """
@@ -33,6 +36,7 @@ class KeyWatcher:
         self.process = None
         self.thread = None
         self.none_here = False  # the tablet has no P keys
+        self.have = set()  # the keys the helper reads on this tablet
 
     def start(self) -> None:
         self.thread = threading.Thread(target=self._run, name="keys", daemon=True)
@@ -68,7 +72,14 @@ class KeyWatcher:
             message = json.loads(line)
         except ValueError:
             return
-        if message.get("key") in ("p1", "p2", "p3", "brightness_up", "brightness_down"):
+        if isinstance(message.get("have"), list):
+            self.have = set(message["have"])
+            try:
+                self.on_key("have")
+            except Exception:
+                pass
+        elif message.get("key") in ("p1", "p2", "p3", "brightness_up", "brightness_down", "power",
+                                    "windows", "windows_up", "rotate", "volume_up", "volume_down"):
             try:
                 self.on_key(message["key"])
             except Exception:

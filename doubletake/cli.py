@@ -4,6 +4,7 @@
     doubletake doctor      check the tablet is ready
     doubletake camera      show the camera and what is new on its card
     doubletake speedtest   measure how fast the camera hands over files
+    doubletake camera-timing   where the wait before copying goes (read only)
     doubletake backup      copy and verify new photos, then make the second copy
     doubletake card        show the card used for the second copy
     doubletake mirror      bring the second copy up to date
@@ -331,34 +332,43 @@ def cmd_speedtest(args, cfg) -> int:
             if f.size > 0 and f.name not in names:
                 names.add(f.name)
                 sample.append(f)
-            if len(sample) >= args.count:
+            if len(sample) >= args.count * 2:
                 break
         if not sample:
             print("No files to test with.")
             return EXIT_FAILED
-        total = sum(f.size for f in sample)
-        print(f"Testing with {len(sample)} files, {human_bytes(total)}. Nothing is written to the tablet.\n")
+        # Each way of reading gets photos of its own: a file read once is kept in the tablet's
+        # memory, so reading it again (from a card reader) would only measure the memory.
+        half = max(1, len(sample) // 2)
+        sets = {"chunked": sample[:half], "whole": sample[half:] or sample[:half]}
+        shared = len(sample) < 2
+        print(f"Testing with {len(sample)} files, {human_bytes(sum(f.size for f in sample))}. "
+              "Nothing is written to the tablet.\n")
 
         results = {}
         if source.supports_chunks:
             try:
+                part = sets["chunked"]
                 t0 = time.time()
-                for f in sample:
+                for f in part:
                     offset = 0
                     while offset < f.size:
                         data = source.read_chunk(f, offset, min(chunk, f.size - offset))
                         if len(data) == 0:
                             break
                         offset += len(data)
-                results["chunked"] = mb_per_s(total, time.time() - t0)
+                results["chunked"] = mb_per_s(sum(f.size for f in part), time.time() - t0)
             except NotSupported:
                 print("Reading in pieces: not supported by this source.")
         else:
             print("Reading in pieces: not supported by this source.")
+        part = sets["whole"]
         t0 = time.time()
-        for f in sample:
+        for f in part:
             source.read_whole(f)
-        results["whole"] = mb_per_s(total, time.time() - t0)
+        results["whole"] = mb_per_s(sum(f.size for f in part), time.time() - t0)
+        if shared and len(results) == 2:
+            del results["whole"]  # the same file again: not a fair measure
 
         for method, speed in results.items():
             label = f"Reading in pieces ({cfg.get('chunk_mb', 8)} MB)" if method == "chunked" else "Whole files"
@@ -368,10 +378,20 @@ def cmd_speedtest(args, cfg) -> int:
         if rate > 0:
             print(f"\nAt {rate:.0f} MB/s, 100 GB would take about {fmt_duration(100_000 / rate)} "
                   f"and a full 256 GB card about {fmt_duration(256_000 / rate)}.")
-        if len(results) == 2 and results["whole"] > results["chunked"] * 1.15:
+        # (A camera setting: from a card reader DoubleTake copies the files as they are.)
+        if "camera" in (info.kind or "") and len(results) == 2 and results["whole"] > results["chunked"] * 1.15:
             print('Whole files are clearly faster here. Set "download_method": "whole" in the settings file '
                   "(doubletake config shows where it is).")
     return EXIT_OK
+
+
+def cmd_camera_timing(args, cfg) -> int:
+    from . import timing
+
+    if args.source.startswith("dir:"):
+        print("camera-timing is for a camera over USB (camera, or sim:/path to try it).")
+        return EXIT_FAILED
+    return timing.Timing(lambda: open_source(args.source)).run()
 
 
 def cmd_backup(args, cfg) -> int:
@@ -693,6 +713,9 @@ def cmd_system_setup(args, cfg) -> int:
     return 0 if setupcli.system_step(cfg, alone=True) else 1
 
 
+APPLIANCE_HOTSPOT = "DoubleTake_HS"
+
+
 def cmd_appliance_setup(args, cfg) -> int:
     """The DoubleTake installer's first start: the user's part of setting up, with no
     questions. Run by doubletake-firstboot as the tablet's user, once the helper's own part
@@ -710,7 +733,12 @@ def cmd_appliance_setup(args, cfg) -> int:
     error = kiosk.switch(True)
     if error:
         problems.append("DoubleTake only: " + error)
-    config.save({"welcome": True})  # the screens open the setup walk-through, once
+    first = {"welcome": True}  # the screens open the setup walk-through, once
+    # An appliance's hotspot has its own name, told apart from the NAS (DoubleTake_NAS). A
+    # second tablet at the same game renames its own in Settings.
+    if (config.load().get("hotspot_name") or "DoubleTake") == "DoubleTake":
+        first["hotspot_name"] = APPLIANCE_HOTSPOT
+    config.save(first)
     for problem in problems:
         print(problem, file=sys.stderr)
     return 1 if problems else 0
@@ -874,6 +902,10 @@ def build_parser() -> argparse.ArgumentParser:
     add_source(p)
     p.add_argument("--count", type=int, default=10, help="how many files to read (default 10)")
     p.set_defaults(func=cmd_speedtest)
+
+    p = sub.add_parser("camera-timing", help="where the wait before copying goes, with a camera (read only)")
+    add_source(p)
+    p.set_defaults(func=cmd_camera_timing)
 
     p = sub.add_parser("backup", help="copy and verify new photos, then make the second copy")
     add_source(p)

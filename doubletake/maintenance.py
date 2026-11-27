@@ -126,6 +126,34 @@ def quiet() -> bool:
     return (nas.system_state().get("edition") or "") in QUIET_EDITIONS
 
 
+# Written by the DoubleTake installer: this tablet is a DoubleTake appliance, so the
+# desktop's corner shows DoubleTake's icon inside the boot screen's ring, and the system as
+# "running on Rocky Linux 9.8".
+APPLIANCE = Path("/etc/doubletake/appliance")
+DOUBLETAKE_ICON = Path(__file__).resolve().parent / "web" / "phone-doubletake.png"
+DOUBLETAKE_RING = DOUBLETAKE_ICON.with_name("phone-ring.png")
+
+
+def ringed_icon(side: int):
+    """DoubleTake's icon inside the ring, as on the phone page, side x side. None when the
+    pictures cannot be read."""
+    from PIL import Image
+
+    try:
+        ring = Image.open(DOUBLETAKE_RING).convert("RGBA").resize((side, side), Image.LANCZOS)
+        icon = Image.open(DOUBLETAKE_ICON).convert("RGBA")
+    except (OSError, ValueError):
+        return None
+    inner = max(1, round(side * 58 / 88))
+    icon = icon.resize((inner, inner), Image.LANCZOS)
+    ring.alpha_composite(icon, ((side - inner) // 2, (side - inner) // 2))
+    return ring
+
+
+def appliance(marker: Path | None = None) -> bool:
+    return (marker or APPLIANCE).exists()
+
+
 def os_release(path: Path = OS_RELEASE) -> dict:
     out = {}
     try:
@@ -235,17 +263,26 @@ def draw_footer(img, host: str = "", release=None, logo=None, mono=None, left: i
     mono = mono or _plex_mono(int(24 * s))
     d = ImageDraw.Draw(img)
     release = os_release() if release is None else release
-    logo = system_logo(release) if logo is None else logo
+    own = appliance()
+    ringed = logo is None and own and DOUBLETAKE_ICON.is_file() and DOUBLETAKE_RING.is_file()
+    if logo is None:
+        logo = DOUBLETAKE_ICON if own and DOUBLETAKE_ICON.is_file() else system_logo(release)
     corner = f"DoubleTake {version_text(__version__)}" + (f"  ·  {host}" if host else "")
     system = release.get("PRETTY_NAME", "")
+    if own and system:
+        system = "running on " + system
     x = left + int(40 * s)
     line = int(34 * s)
     top = h - int(56 * s) - (line if system else 0)
     if logo:
         try:
-            mark = Image.open(logo).convert("RGBA")
             side = line * 2 if system else int(line * 1.4)
-            mark.thumbnail((side, side), Image.LANCZOS)
+            if ringed:
+                side = int(side * 1.15)  # the ring around the icon keeps the icon its size
+            mark = ringed_icon(side) if ringed else None
+            if mark is None:
+                mark = Image.open(logo).convert("RGBA")
+                mark.thumbnail((side, side), Image.LANCZOS)
             img.paste(mark, (x, top + (side - mark.height) // 2 - int(4 * s)), mark)
             x += side + int(22 * s)
         except (OSError, ValueError):
@@ -393,8 +430,13 @@ def _set_favorites(apps: list) -> None:
 def dress_desktop(data: dict) -> dict:
     """Wallpaper, dock button and notification. The desktop's own values are kept in 'data'."""
     saved = data.setdefault("saved", {})
+    # Drawn at the screen's own size: drawn 16:9 and shown 'zoom' on a 16:10 screen (the
+    # FZ-M1's 1280 x 800), the sides were trimmed and the corner's icon cut in half.
+    screen = screen_size()
+    if not screen or min(screen) < 480:
+        screen = (1920, 1080)
     try:
-        uri = make_wallpaper(host=socket.gethostname().split(".")[0]).as_uri()
+        uri = make_wallpaper(size=screen, host=socket.gethostname().split(".")[0]).as_uri()
     except Exception:
         uri = ""
     for key, value in DESKTOP_KEYS:
@@ -455,7 +497,44 @@ def at_desktop_login() -> int:
             _notify("DoubleTake maintenance mode",
                     "Could not switch the next login back to DoubleTake: "
                     + answer.get("error", "unknown") + ". Open DoubleTake, Settings, Device.")
+    watch_idle(config.load())
     return 0
+
+
+def watch_idle(cfg: dict, tick: float = 2.0) -> None:
+    """For the visit: DoubleTake's own screen and sleep settings on the desktop too (it does
+    not run here, and the desktop's own are off, so the tablet would otherwise stay lit).
+    The screen goes dark after "Screen dark after" (the backlight down, the panel kept on so
+    touch still works) and lights at a touch; the tablet sleeps after its wait on battery or
+    on the charger, never while a computer copies from the NAS or the system updates. Runs
+    until the visit's login ends (the desktop stops it then)."""
+    from . import powerctl, screen
+    from .station import _tablet_battery
+
+    if powerctl.idle_seconds() is None:
+        return  # no desktop to ask (tests, or another desktop)
+    dark = False
+    nas_used = 0.0
+    while True:
+        quiet = powerctl.idle_seconds()
+        if quiet is None:
+            return
+        dark_after = int(cfg.get("screen_dark_after", 5) or 0) * 60
+        if dark and quiet < tick * 2:
+            screen.set_power(True)
+            dark = False
+        elif dark_after and not dark and quiet >= dark_after:
+            dark = screen.set_power(False)
+        if nas.in_use():
+            nas_used = time.time()
+        on_power = bool(_tablet_battery().get("on_power", True))
+        key = "sleep_on_charger" if on_power else "sleep_on_battery"
+        sleep_after = int(cfg.get(key, 60 if on_power else 30) or 0) * 60
+        busy = time.time() - nas_used < 120 or powerctl.updating()
+        if sleep_after and quiet >= sleep_after and not busy:
+            screen.suspend()
+            time.sleep(30)  # waking: let the desktop count from the wake-up
+        time.sleep(tick if dark else tick * 2)
 
 
 def _offer_updates() -> None:

@@ -18,6 +18,38 @@ and the desktop itself for maintenance mode.
 
 Then DoubleTake, two ways: the package, which is the easy one, or setup.sh from the source.
 
+Or both at once: the **installer stick** puts Rocky Linux 9 and DoubleTake on the tablet
+together, as an appliance, and erases whatever was on it.
+
+### The installer stick
+
+1. Download `doubletake-<version>-installer.iso` and `SHA256SUMS-iso` from the latest
+   release. Check it if you like: `sha256sum -c SHA256SUMS-iso` in the same folder.
+2. Write it to a USB stick (2 GB or more; everything on the stick goes) with Fedora Media
+   Writer or balenaEtcher.
+3. Start the tablet from the stick: on the Dells, F12 at the Dell logo; on other tablets,
+   the firmware's boot menu.
+4. The text step, one screen at a time:
+   - **A network.** A cable (a dock or a USB-C adapter) is used first. Otherwise it lists
+     the Wi-Fi networks in sight: pick one by its number and type the password (h for a
+     hidden network, r to look again). Rocky Linux's packages come from the internet
+     during the install, about 2 GB.
+   - **The user name and password** for the tablet itself (Maintenance mode, updates). The
+     tablet's serial number is offered as the name: the Dell service tag, or the last six
+     characters of a longer serial. Enter takes it.
+   - **The time zone**, asked when the network cannot tell, with each zone's time beside it.
+   - **Ready to install:** the tablet, the user, the time zone, its name on the network
+     (`dt-<serial>`) and the drive it will use. **Type ERASE** to install. ZONE changes the
+     time zone, OFF turns the tablet off. Nothing is erased before ERASE.
+5. The install runs by itself, 15 to 30 minutes, with each step listed on the screen and a
+   thin line filling from orange to green. The tablet restarts into DoubleTake's welcome
+   pages, which ask the rest (the DoubleTake password, Copy 2, the NAS, and so on).
+
+The drive is laid out for photos: 25 GB for the system, the rest for `/home`, where the
+photos live. The tablet comes up as an appliance: the 12-hour clock, only the apps
+DoubleTake needs, power on Balanced, the NAS named DoubleTake_NAS and the hotspot
+DoubleTake_HS. Updates come in Maintenance mode, as with the package.
+
 ### The package
 
 Download `doubletake-<version>.zip` from the latest release and unpack it (double-click
@@ -123,6 +155,13 @@ What happens by itself:
   photos, is never offered.
 - **The format check is always on screen.** Green only when every photo on the camera's
   cards is verified on the tablet and on the second copy.
+- **Room for photos, in the bottom bar.** One number: how much more can still be backed
+  up to both copies, which is the smaller room of the two (Copy 1 also holds the system,
+  so it usually fills first). Each copy has its own icon: amber when Copy 2 has no card or
+  drive, is switched off or paused, or the tablet's drive is under 20 GB; red when a copy is
+  full or Copy 2 has stopped, with a word or two beside the label saying which. With no
+  Copy 2 it reads "on the tablet only". A tap opens the tablet's status, with each copy's
+  own numbers.
 
 Full screen runs a separate Firefox of its own, which Exit closes. It does
 not touch your normal Firefox. If the screens are closed by accident, run
@@ -145,7 +184,7 @@ folder holds only the new photos. A backup stopped part-way is carried on in its
 folder.
 
 **Backing up again soon after.** When an import was made in the last 12 hours, Start asks
-where the photos go: one button for each of those imports (up to five, the latest first),
+where the photos go: one button for each of those imports (up to five, the most recent, in the order they were made: 01, 02, ...),
 and **New folder**. One tap starts the backup. Football half-time: tap the first half's
 import, and the game stays in one folder. A new game or a new family: New folder. After 12
 hours without a backup, Start does not ask, and a new folder is made. P1 and unattended
@@ -203,6 +242,14 @@ Safe to Format counts Copy 1 and Copy 2 only.
 - Tap a photo in the grid to open it. It is shown whole, in a mat: a frame of the same
   width on all four sides, on the screen's own colour. Swipe, the arrow buttons or the keyboard's arrow
   keys move between photos. The strip on the right shows the nearby frames.
+- **Rotate** (↻, in the top bar next to Back, in the viewer and the editor) turns the photo
+  90° clockwise a tap; four taps and it is back. For cameras that do not record which way up
+  they were held, such as the Insta360; photos from most cameras (Nikon, Canon, Sony and
+  phones) already come in the right way up. Only DoubleTake's pictures turn (the thumbnails, the viewer, the editor, exported
+  JPEGs and so what goes to a phone); the photo file itself is never changed, so both
+  copies keep matching their checksums, and the photo app on your computer shows it as the
+  camera recorded it.
+  A crop already made turns with the photo. Reset in the editor leaves the turn as it is.
 - **50%, 75% and 100%** zoom in to check focus. Double-tap a spot on the photo to look
   there at the level last chosen, drag to look around, and double-tap again (or Fit) to go
   back. The label shows the size of the picture being used: it is the JPEG preview the
@@ -641,8 +688,10 @@ cameras use Bluetooth only for remote control and small previews, and photos com
   the same is `sudo grubby --update-kernel=ALL --args="i915.enable_psr=0 i915.enable_dc=0"`
   (and `--remove-args` to undo); `cat /proc/cmdline` shows whether it is in use. If
   Panel Self Refresh alone is enough on a tablet, set just that one by hand.
-- **About:** the version, the tablet, the system, the camera and image libraries, and the
-  three folders.
+- **About:** the version, the tablet, its processor, memory and drive, **Copy 2** (the card
+  or drive as it describes itself: maker, model, size, the month a microSD card was made,
+  a USB drive's link speed; then exFAT and its name), the system, the camera and image
+  libraries, and the three folders.
 - **Start at power-on:** the tablet logs in by itself, with no password, and opens
   DoubleTake full screen. The screen does not lock or go dark. Switching it off puts the
   login password, the lock screen and the desktop's own blanking settings back. The NAS
@@ -682,31 +731,61 @@ looked for.
   60 days.
 - Any time, in a terminal: `doubletake update`.
 
-### The tablet's own keys (Dell Latitude 7220)
+### The tablet's own keys
 
-The three keys on the 7220's frame do one job each, whatever is on the screen:
+DoubleTake knows the buttons on three tablets. Each does one job, whatever is on the screen,
+and none of them leaves DoubleTake: Maintenance mode is in Settings, Device, behind the
+DoubleTake password, and never on a key. Each press is one tap, however long it is held.
+
+| Button | Dell Latitude 7220 | Dell Latitude 7212 | Panasonic FZ-M1 |
+| --- | --- | --- | --- |
+| **P1** | One-touch backup | One-touch backup | (none: use Unattended backup) |
+| **P2** / **A** | Red screens (night vision) | Red screens | **A**: red screens (see below) |
+| **P3** | The tablet's status | The tablet's status | (none: Settings, Device, Tablet status) |
+| **Windows** | (none) | Home screen | Home screen |
+| **Rotate** | (none) | Screen brightness | Screen brightness |
+| **Volume** | Volume | Volume | Volume (the Up and Down buttons) |
+| **Brightness** | Brightness | (none) | (none) |
 
 - **P1, one-touch backup:** with the camera plugged in, the new photos are backed up at
   once, just as with Back up on the screen, and the screen shows it as usual. The beeps
   follow it: one at the start, two when done, three low ones if it cannot start or needs
   a look. Pressing P1 again during a backup does nothing, so a second press is harmless.
   P1 works whenever the screen is on; a sleeping tablet is woken with the power button.
-- **P2, red:** the screens turn red on black, keeping your night vision: Cockpit Red in
-  the Cockpit look, Night Red in the Classic one. Again, and the theme you had
-  comes back.
+- **P2 (or A), red:** the screens turn red on black, keeping your night vision: Cockpit Red
+  in the Cockpit look, Night Red in the Classic one. Again, and the theme you had comes back.
 - **P3, the tablet's status:** a panel over whatever is on the screen: DoubleTake's
   version and the system, the number of shoots and photos, the space the photos take on
   Copy 1 and Copy 2 and the space free on each, and each battery's charge, whether it is
   charging, its health (what it holds now against when it was new) and its charge
   cycles, with the time left at the rate it is going. A tap anywhere, or P3 again, closes
   it. On any tablet, Settings, Device, **Tablet status** shows the same panel.
+- **Windows, Home:** back to the Home screen from anywhere, like «.
+- **Rotate, brightness:** the screen's own rotation-lock button steps the brightness 25%
+  at a time, up to full and back down again (25, 50, 75, 100, 75, 50, 25...), never to
+  black. The screens stay the way up they are.
+
+**The Panasonic FZ-M1's A button needs one setting first.** Out of the box, the A button
+talks only to Panasonic's own Windows software, and nothing reaches Linux. Its Setup
+Utility has one other choice that Linux can see, Ctrl+Alt+Del, and DoubleTake reads that as
+the A button:
+
+1. Turn the tablet on and open its Setup Utility: F2 on a keyboard while the Panasonic
+   logo shows (with no keyboard, the tablet's buttons stand in for F2 at that moment).
+2. **Main, Tablet Button Configuration, A Button:** choose **Ctrl+Alt+Del**.
+3. Save and exit (F10).
+
+Ctrl+Alt+Del usually means restart, so on the FZ-M1 DoubleTake switches that meaning off:
+the install stops the system restarting for it (at a text screen, or pressed 7 times in a
+row), and Start at power-on stops the desktop's Log Out box. A press is read from the
+tablet's own buttons only, never from a keyboard plugged in, so Ctrl+Alt+Del typed on a
+keyboard is not night mode. In Maintenance mode's desktop, the Windows and rotate buttons
+open the desktop's Activities, as on any GNOME desktop.
 
 The volume and brightness keys work in DoubleTake only too (the kiosk session has no
 handler of its own for them): the screens pass them on, and a small bar shows the level
 for a moment. Volume never goes above 100%, and brightness never down to black.
 
-The keys send one tap each, however long they are held. None of them leaves DoubleTake:
-Maintenance mode is in Settings, Device, behind the DoubleTake password, and never on a key.
 
 ### Screenshots
 

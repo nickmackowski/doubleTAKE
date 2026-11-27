@@ -84,6 +84,19 @@ class PowerOnTests(unittest.TestCase):
                          "'suspend'")
         self.assertEqual(config.read_user()["desktop_saved"], {})
 
+    def test_the_fz_m1s_ctrl_alt_del_does_not_log_out(self):
+        # Its A button sends Ctrl+Alt+Del (night mode in DoubleTake): no Log Out box for it.
+        logout = ("org.gnome.settings-daemon.plugins.media-keys", "logout")
+        self.desktop.values[logout] = "['<Control><Alt>Delete']"
+        with mock.patch.object(poweron, "_product", lambda: "FZM1-3"):
+            poweron.switch(self.cfg, True, "pilot")
+            self.assertEqual(self.desktop.values[logout], "@as []")
+            poweron.switch(self.cfg, False, "pilot")
+        self.assertEqual(self.desktop.values[logout], "['<Control><Alt>Delete']")
+        with mock.patch.object(poweron, "_product", lambda: "Latitude 7212 Rugged Extreme Tablet"):
+            poweron.switch(self.cfg, True, "pilot")
+        self.assertEqual(self.desktop.values[logout], "['<Control><Alt>Delete']")  # the Dells: as it was
+
     def test_other_users_autologin_is_not_ours(self):
         self.gdm.write_text("[daemon]\nAutomaticLoginEnable=True\nAutomaticLogin=someone\n")
         self.assertEqual(poweron.autologin_user(), "someone")

@@ -83,7 +83,57 @@ class HelperBase(unittest.TestCase):
             return fh.read()
 
 
+DMIDECODE = """# dmidecode 3.6
+Handle 0x0040, DMI type 17, 40 bytes
+Memory Device
+\tSize: No Module Installed
+\tType: Unknown
+
+Handle 0x0041, DMI type 17, 40 bytes
+Memory Device
+\tSize: 8 GB
+\tType: DDR4
+\tSpeed: 2400 MT/s
+\tManufacturer: Samsung
+\tConfigured Memory Speed: 2400 MT/s
+"""
+
+
+class TabletDetailsTests(HelperBase):
+    def dmi(self, serial, vendor="Dell Inc."):
+        folder = os.path.join(self.root, "sys/class/dmi/id")
+        os.makedirs(folder, exist_ok=True)
+        for name, value in (("product_serial", serial), ("sys_vendor", vendor)):
+            with open(os.path.join(folder, name), "w") as fh:
+                fh.write(value + "\n")
+
+    def test_serial_and_memory_are_written_for_about(self):
+        self.dmi("7XQ2K93")
+        self.rec.answers["dmidecode -t 17"] = (0, DMIDECODE, "")
+        found = helper.tablet_details(self.sys)
+        self.assertEqual(found, {"serial": "7XQ2K93", "vendor": "Dell Inc.", "memory_type": "DDR4",
+                                 "memory_speed": "2400 MT/s", "memory_maker": "Samsung"})
+        self.assertEqual(json.loads(self.file("/etc/doubletake/tablet.json")), found)
+        self.assertEqual(oct(os.stat(os.path.join(self.root, "etc/doubletake/tablet.json")).st_mode & 0o777), "0o644")
+
+    def test_a_placeholder_serial_is_left_out(self):
+        self.dmi("To Be Filled By O.E.M.", "Some Maker")
+        self.rec.answers["dmidecode -t 17"] = (1, "", "no SMBIOS")
+        self.assertEqual(helper.tablet_details(self.sys), {"serial": "", "vendor": "Some Maker"})
+
+
 class InstallTests(HelperBase):
+    def test_an_appliance_nas_is_named_doubletake_nas(self):
+        self.job("install", "--library", LIBRARY)
+        self.assertNotIn("netbios name", self.file("/etc/samba/doubletake.conf"))  # a zip install
+        os.makedirs(os.path.join(self.root, "etc/doubletake"), exist_ok=True)
+        with open(os.path.join(self.root, "etc/doubletake/appliance"), "w") as fh:
+            fh.write("Installed by the DoubleTake installer\n")
+        self.job("install", "--library", LIBRARY)
+        conf = self.file("/etc/samba/doubletake.conf")
+        self.assertIn("   netbios name = DoubleTake_NAS\n   mdns name = netbios", conf)
+        self.assertLessEqual(len(helper.NAS_NAME), 15)
+
     def test_install_sets_everything_up_once(self):
         code, result = self.job("install", "--library", LIBRARY)
         self.assertEqual((code, result["ok"]), (0, True))
@@ -100,6 +150,19 @@ class InstallTests(HelperBase):
         self.assertIn(f"What={LIBRARY}", self.file("/etc/systemd/system/srv-doubletake-Photos.mount"))
         state = json.loads(self.file("/etc/doubletake/nas.json"))
         self.assertEqual((state["owner"], state["library"]), (OWNER, LIBRARY))
+
+    def test_install_quiets_ctrl_alt_del_only_on_a_tablet_whose_button_sends_it(self):
+        self.job("install", "--library", LIBRARY)
+        self.assertFalse(self.rec.ran("systemctl", "mask", "ctrl-alt-del.target"))  # not here
+        os.makedirs(os.path.join(self.root, "sys/class/dmi/id"), exist_ok=True)
+        with open(os.path.join(self.root, "sys/class/dmi/id/product_name"), "w") as fh:
+            fh.write("FZM1-3\n")
+        code, result = self.job("install", "--library", LIBRARY)
+        self.assertEqual(code, 0)
+        self.assertIn("ctrl-alt-del", result["done"])
+        self.assertTrue(self.rec.ran("systemctl", "mask", "ctrl-alt-del.target"))
+        self.assertIn("CtrlAltDelBurstAction=none", self.file(helper.CAD_CONF))
+        self.assertTrue(self.rec.ran("systemctl", "daemon-reexec"))
 
     def test_only_the_photos_are_shared(self):
         rhel = ("[global]\n\tworkgroup = SAMBA\n\n[homes]\n\tcomment = Home Directories\n\tvalid users = %S, %D%w%S\n"
@@ -612,6 +675,17 @@ class AdoptTests(HelperBase):
         rule = self.file("/etc/sudoers.d/doubletake")
         self.assertIn(f"{OWNER} ALL=(root) NOPASSWD: " + helper.HELPER_PATH, rule)
         self.assertEqual(self.sys.state()["owner"], OWNER)
+
+    def test_power_goes_to_balanced_once(self):
+        code, result = self.job("adopt", "--library", LIBRARY)
+        self.assertIn("power: balanced", result["done"])
+        self.assertEqual(self.file("/etc/tuned/ppd_base_profile"), "balanced\n")
+        self.assertTrue(self.rec.ran("systemctl", "try-restart", "tuned-ppd.service"))
+        with open(os.path.join(self.root, "etc/tuned/ppd_base_profile"), "w") as fh:
+            fh.write("performance\n")  # chosen in Settings afterwards
+        code, result = self.job("adopt", "--library", LIBRARY)
+        self.assertNotIn("power: balanced", result["done"])
+        self.assertEqual(self.file("/etc/tuned/ppd_base_profile"), "performance\n")
 
     def test_without_sudo_it_is_refused(self):
         self.env = {}

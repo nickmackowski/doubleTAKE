@@ -102,6 +102,8 @@ class Ledger:
             if column not in have:
                 self.db.execute(f"ALTER TABLE shoots ADD COLUMN {column} REAL")
         self.db.commit()
+        # 1.1.2c: a deleted shoot is forgotten. Shoots deleted by earlier versions go now.
+        self.forget_cleared()
 
     def close(self) -> None:
         self.db.close()
@@ -355,8 +357,10 @@ class Ledger:
             " AND f.src_name=? AND f.size=? AND f.mtime BETWEEN ? AND ? AND f.status='verified'",
             (serial, serial, name, size, mtime - within, mtime + within),
         ).fetchall()
+        # A deleted shoot is forgotten (1.1.2c): its photos, if still on the camera, are new
+        # again. (One still waiting for its Copy 2 card to come back is ignored here too.)
         kept = [r for r in rows if not r["cleared"]]
-        return bool(kept), any(r["mirrored"] for r in kept), bool(rows) and not kept
+        return bool(kept), any(r["mirrored"] for r in kept), False
 
     # ----- imported, and clearing ---------------------------------------------
 
@@ -367,6 +371,32 @@ class Ledger:
     def set_cleared(self, shoot_id: int, when) -> None:
         self.db.execute("UPDATE shoots SET cleared=? WHERE id=?", (when, shoot_id))
         self.db.commit()
+
+    def forget_shoot(self, shoot_id: int) -> bool:
+        """Forget a deleted shoot: its records go, so nothing about it is kept. The one
+        exception, out of sight: photos whose second copy is still on a card that was out
+        when the shoot was deleted keep their records until that card comes back and the
+        copy is removed from it. Returns True when the shoot is gone entirely."""
+        db = self.db
+        row = db.execute("SELECT cleared FROM shoots WHERE id=?", (shoot_id,)).fetchone()
+        if row is None:
+            return True
+        if row["cleared"] is None:
+            raise ValueError("Only a deleted shoot is forgotten.")
+        loose = "SELECT f.id FROM files f WHERE f.shoot_id=? AND NOT EXISTS (SELECT 1 FROM copies c WHERE c.file_id=f.id)"
+        db.execute(f"DELETE FROM pending_renames WHERE file_id IN ({loose})", (shoot_id,))
+        db.execute(f"DELETE FROM files WHERE id IN ({loose})", (shoot_id,))
+        left = db.execute("SELECT COUNT(*) FROM files WHERE shoot_id=?", (shoot_id,)).fetchone()[0]
+        if not left:
+            db.execute("DELETE FROM runs WHERE shoot_id=?", (shoot_id,))
+            db.execute("DELETE FROM shoots WHERE id=?", (shoot_id,))
+        db.commit()
+        return not left
+
+    def forget_cleared(self) -> int:
+        """Forget every deleted shoot that can be (see forget_shoot). Returns how many went."""
+        ids = [r[0] for r in self.db.execute("SELECT id FROM shoots WHERE cleared IS NOT NULL")]
+        return sum(1 for i in ids if self.forget_shoot(i))
 
     def cover(self, shoot_id: int):
         """The id of a shoot's first photo, to show as its picture."""

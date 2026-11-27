@@ -66,6 +66,14 @@ echo
 say "Installing. This downloads what DoubleTake needs, a minute or two."
 echo
 sudo dnf install -y "$rpm" || stop "The install did not finish (above is why). Nothing of DoubleTake's was set up."
+# A package that counts as older than the one installed (going from a test build to a release
+# candidate, or back to an earlier one): dnf install leaves it be, so install it as a downgrade.
+want=$(rpm -qp --qf '%{VERSION}' "$rpm" 2>/dev/null)
+now=$(rpm -q --qf '%{VERSION}' doubletake 2>/dev/null)
+if [ -n "$want" ] && [ "$now" != "$want" ]; then
+  say "That package counts as older than DoubleTake $now, which is installed. Putting $want in its place."
+  sudo dnf downgrade -y "$rpm" || stop "The install did not finish (above is why)."
+fi
 echo
 command -v doubletake >/dev/null || stop "The doubletake command is not there after the install."
 

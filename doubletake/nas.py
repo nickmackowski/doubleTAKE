@@ -193,6 +193,17 @@ def _name_by_card(address: str, cards: dict) -> str:
     return ""
 
 
+def in_use(max_age: float = 15.0) -> bool:
+    """A computer has files open on the NAS now (copying from it), as last written by the
+    status service. Only the open files count: a computer that merely has the NAS mounted
+    does not keep the tablet awake for ever."""
+    try:
+        data = json.loads(STATUS_FILE.read_text())
+    except (OSError, ValueError):
+        return False
+    return time.time() - float(data.get("time", 0)) < max_age and bool(data.get("open"))
+
+
 def connections(max_age: float = 15.0) -> dict:
     """Who is connected, and which files are open, as last written by the status service."""
     try:

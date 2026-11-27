@@ -1,0 +1,41 @@
+#!/bin/bash
+# The first start after the DoubleTake installer, as root, once: what `doubletake setup`
+# does with its first questions, with no questions.
+#
+#   1. the helper's own part (adopt): the sudo rule for the screens, the NAS, the boot menu
+#      entry, and the DoubleTake boot screen
+#   2. the user's part (doubletake appliance-setup): start at power-on, DoubleTake only
+#
+# Then the login screen starts, logs in by itself, and DoubleTake opens on its setup pages.
+# A log is kept in /var/log/doubletake-firstboot.log.
+
+exec >>/var/log/doubletake-firstboot.log 2>&1
+echo "== $(date)  DoubleTake first start"
+
+flag=/var/lib/doubletake/firstboot
+[ -e "$flag" ] || { echo "already done"; exit 0; }
+
+# The tablet's user: the one made in the installer, the first ordinary user.
+user=$(getent passwd | awk -F: '$3 >= 1000 && $3 < 60000 { print $1; exit }')
+if [ -z "$user" ]; then
+  echo "no user made in the installer: run doubletake setup after logging in"
+  rm -f "$flag"
+  exit 0
+fi
+home=$(getent passwd "$user" | cut -d: -f6)
+library="$home/Pictures/DoubleTake"
+echo "user: $user  library: $library"
+
+runuser -u "$user" -- mkdir -p "$library"
+SUDO_USER="$user" /usr/libexec/doubletake-helper adopt --library "$library"
+echo "adopt: done ($?)"
+
+# Power on Balanced: adopt does that, as on every DoubleTake install.
+
+# The user's part needs the user's own settings bus (gsettings), so it gets one of its own.
+runuser -u "$user" -- env HOME="$home" dbus-run-session -- doubletake appliance-setup
+echo "appliance-setup: done ($?)"
+
+rm -f "$flag"
+systemctl disable doubletake-firstboot.service
+echo "== finished"

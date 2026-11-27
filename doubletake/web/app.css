@@ -60,12 +60,14 @@ svg { fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; 
 .chip { padding: .125rem .75rem; border: .125rem solid var(--orange); border-radius: .25rem; color: var(--orange); font-family: var(--cond); font-weight: 600; font-size: 1.25rem; letter-spacing: .06em; text-transform: uppercase; white-space: nowrap; }
 .chip.solid { background: var(--orange); color: var(--on-accent); }
 .chip.ok { border-color: #fff; color: #fff; }
+.bar-update { font-size: 1.25rem; padding: .375rem 1rem; border-radius: .375rem; font-weight: 700; cursor: pointer; }
 .bar-folder { font-size: 1.25rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .bar-stat { display: flex; align-items: center; gap: .5rem; font-size: 1.25rem; font-weight: 600; white-space: nowrap; }
 .bar-stat svg { width: 1.75rem; height: 1.75rem; }
 .back { width: 3.5rem; height: 3.5rem; margin-left: -.75rem; display: flex; align-items: center; justify-content: center; border: .125rem solid var(--on-bar); border-radius: .375rem; color: var(--on-bar); }
 .back svg { width: 2rem; height: 2rem; stroke-width: 2.5; }
 #home:not([hidden]) + .back { margin-left: 0; }  /* home sits first, back next to it */
+#back:not([hidden]) + .rotate { margin-left: .5rem; }  /* a little apart from the way back (Nick 2026-11-27) */
 
 /* ----- shared pieces ----- */
 .view { display: none; flex: 1; min-height: 0; flex-direction: column; }
@@ -198,6 +200,12 @@ svg { fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; 
 .disc svg { width: 3.5rem; height: 3.5rem; stroke-width: 3; }
 .banner-sub { font-size: 1.75rem; font-weight: 700; line-height: 1.2; margin-top: .375rem; }
 .banner-side { max-width: 24rem; font-size: 1.375rem; font-weight: 600; line-height: 1.35; }
+/* The title on one line: broken in two (BACKUP / INTERRUPTED, on a 16:10 screen such as the
+   FZ-M1's) it took the height the box under it needs. The note beside it gives way first;
+   a title still too long is drawn a little smaller (app.js, oneLine). */
+.banner .h0 { white-space: nowrap; }
+.banner > .grow { min-width: 0; }
+.banner-side { flex: 0 1 24rem; min-width: 12rem; }
 .four { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 1rem; }
 .state { font-size: 1.5rem; font-weight: 700; white-space: nowrap; font-variant-numeric: tabular-nums; }
 .state.orange { color: var(--warn-text); }
@@ -302,7 +310,7 @@ svg { fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; 
 .thumb.on .num { background: var(--solid); color: var(--on-solid); }
 
 /* ----- viewer ----- */
-.viewer { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(0, 1fr) 22rem; }
+.viewer { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(0, 1fr) 20rem; }
 .stage-col { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
 .stage { position: relative; flex: 1; min-height: 0; overflow: hidden; background: var(--photo); touch-action: none; }
 /* The fitted photo in a mat: an even frame on all four sides (sized in placeFit), on the
@@ -341,6 +349,39 @@ svg { fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; 
 .taken .v { font-size: 1.5rem; font-weight: 700; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .strip { display: flex; flex-direction: column; gap: .75rem; padding: 1rem 1rem 1.25rem; background: var(--paper); border-left: .125rem solid var(--edge); min-height: 0; }
 .strip .thumbs { grid-template-columns: 1fr 1fr; gap: .625rem; }
+/* Previous and Next: buttons either side of the photo, centred on it, in the same style and
+   arrow size as the strip's Up and Down; the tools below line up with the photo area's edges
+   (zoom on the left, Export, Edit and All on the right). */
+/* --side is each side column's width, set in placeFit so the photo area is exactly as wide as
+   the framed photo: the arrows sit centred in the black beside it and the tools line up with
+   its edges. */
+.stage-col { --side: 3.75rem; --arrow: 3.75rem; }
+.stage-row { --side-gap: .5rem; flex: 1; min-height: 0; display: flex; gap: var(--side-gap);
+  padding: 0 .5rem; }
+.stage-row .stage { flex: 1; min-width: 0; }
+.stage-row .side { flex: none; width: var(--arrow); margin: 0 calc((var(--side) - var(--arrow)) / 2);
+  min-height: 0; height: 9rem; align-self: center; padding: 0;
+  display: flex; align-items: center; justify-content: center; }
+.stage-row .side svg { width: 2.25rem; height: 2.25rem; fill: none; stroke: currentColor; stroke-width: 2.5;
+  stroke-linecap: round; stroke-linejoin: round; }
+.vw-tools { padding-left: calc(.5rem + var(--tools-side, var(--side)) + .5rem);
+  padding-right: calc(.5rem + var(--tools-side, var(--side)) + .5rem); }
+.vw-tools .grow { flex: 1; }
+/* The viewer's buttons sit along the bottom edge, against a rugged tablet's raised bezel: a
+   flat finger there is felt a few millimetres higher, on the photo (the FZ-M1's 7-inch screen
+   showed it). Each button also takes the band above it, into the photo, and the strip below
+   it down to the screen's edge. Nothing seen changes: the zoom buttons round their own outer
+   corners, as the box around them no longer clips them. */
+.vw-tools .seg { overflow: visible; }
+.vw-tools .seg button:first-child { border-radius: .25rem 0 0 .25rem; }
+.vw-tools .seg button:last-child { border-radius: 0 .25rem .25rem 0; }
+.vw-tools button { position: relative; }
+.vw-tools button::after { content: ""; position: absolute; left: 0; right: 0; top: -2.25rem; bottom: -1.5rem; }
+#vw-export.done { color: var(--green); }
+.strip-page { margin-top: auto; display: grid; grid-template-columns: 1fr 1fr; gap: .625rem; }
+.strip-page .btn { min-height: 4.25rem; padding: 0; }
+.strip-page svg { width: 2.25rem; height: 2.25rem; fill: none; stroke: currentColor; stroke-width: 2.5;
+  stroke-linecap: round; stroke-linejoin: round; }
 
 /* ----- settings ----- */
 .settings { flex: 1; min-height: 0; display: grid; grid-template-columns: 25rem minmax(0, 1fr); }
@@ -479,10 +520,13 @@ svg { fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; 
 .ed-buttons { display: flex; gap: .625rem; }
 .ed-buttons .btn { flex: 1; min-height: 3.25rem; }
 .ed-buttons .btn.on { background: var(--solid); color: var(--on-solid); }
-.ed-row { display: flex; flex-direction: column; gap: .25rem; }
+/* The whole row takes the finger (app.js, edSlider): on the FZ-M1's 7-inch screen a flat
+   finger lands beside the thin track. The padding, taken back by the margin, joins the rows'
+   touch areas across the gap between them without moving anything. */
+.ed-row { display: flex; flex-direction: column; gap: .25rem; padding: .3125rem 0; margin: -.3125rem 0; touch-action: pan-y; }
 .ed-top { display: flex; justify-content: space-between; font-size: 1.25rem; font-weight: 600; user-select: none; }
 .ed-val { font-family: var(--mono); font-variant-numeric: tabular-nums; color: var(--muted); }
-.ed-row input[type=range] { width: 100%; height: 2.5rem; margin: 0; accent-color: var(--orange); touch-action: pan-y; }
+.ed-row input[type=range] { width: 100%; height: 2.5rem; margin: 0; accent-color: var(--orange); touch-action: pan-y; pointer-events: none; }
 .ed-row input[type=range]::-moz-range-thumb { width: 1.75rem; height: 1.75rem; }
 .ed-row input[type=range]::-webkit-slider-thumb { width: 1.75rem; height: 1.75rem; }
 .ed-row input[type=range]:disabled { opacity: .35; }
@@ -630,6 +674,8 @@ svg { fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; 
 :root[data-look="cockpit"] .seg { border: .0625rem solid var(--edge); border-radius: .75rem; }
 :root[data-look="cockpit"] .seg button { font-family: var(--sans); font-weight: 600; font-size: 1.3125rem; letter-spacing: .08em; }
 :root[data-look="cockpit"] .seg button + button { border-left-width: .0625rem; }
+:root[data-look="cockpit"] .vw-tools .seg button:first-child { border-radius: .6875rem 0 0 .6875rem; }
+:root[data-look="cockpit"] .vw-tools .seg button:last-child { border-radius: 0 .6875rem .6875rem 0; }
 :root[data-look="cockpit"] .seg.ed-aspect button { border-left-width: .0625rem; }
 :root[data-look="cockpit"] .seg.ed-aspect button:nth-child(n + 4) { border-top-width: .0625rem; }
 :root[data-look="cockpit"] .toggle { border-width: .0625rem; font-family: var(--sans); }
@@ -747,6 +793,13 @@ svg { fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; 
 .foot-copy { display: flex; align-items: center; gap: .75rem; }
 .foot-copy.off { opacity: .45; }
 .foot-copy svg[hidden] { display: none; }
+.foot-box { cursor: pointer; }
+.foot-icons { display: flex; align-items: center; gap: .5rem; }
+.foot-ico { display: inline-flex; }
+.foot-ico.low { color: var(--batt-warn, #B86E00); }
+.foot-ico.out { color: var(--batt-low, #C4261D); }
+.foot-warn.low { color: var(--batt-warn, #B86E00); }
+.foot-warn.out { color: var(--batt-low, #C4261D); }
 svg[hidden] { display: none; }
 
 /* ----- the setup wizard ----- */
@@ -789,6 +842,9 @@ svg[hidden] { display: none; }
 .ex-sharing .body { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .logo-box { margin-top: .625rem; display: inline-block; padding: .75rem 1rem; background: #16181b; border-radius: .375rem; }
 .logo-box img { display: block; max-height: 4rem; max-width: 28rem; }
+.wm-box { padding: .25rem 0 .5rem; }
+.wm-box img { display: block; width: 100%; max-width: 36rem; aspect-ratio: 3 / 2; object-fit: contain; background: #16181b; border-radius: .375rem; }
+.wm-box img.off { opacity: .45; }
 .link-list { display: flex; flex-direction: column; gap: .5rem; margin-top: .625rem; }
 .link-item { display: flex; align-items: center; gap: 1rem; }
 .link-item .t { font-size: 1.25rem; font-weight: 700; white-space: nowrap; }
@@ -803,9 +859,18 @@ label.btn { display: inline-flex; align-items: center; justify-content: center; 
 :root[data-look="cockpit"] .ex-sharing { border-width: .0625rem; border-radius: .75rem; }
 
 /* ----- 1.0.5c: where a backup soon after another goes ----- */
-.where { width: 62rem; max-width: 94vw; }
-.where-list { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin-top: 1.25rem; }
-.where-pick { display: flex; flex-direction: column; align-items: flex-start; justify-content: center; gap: .375rem; min-height: 6.5rem; padding: 1rem 1.25rem; text-align: left; text-transform: none; letter-spacing: 0; }
+/* The folder choice: only as wide as its boxes, three across (two with one import), the
+   imports newest first and "New folder" right after the last; Cancel centred underneath,
+   one box wide. The boxes are all one size and their lines wrap inside. */
+.where { --box: 24rem; width: min-content; max-width: 96vw; }
+.where-list { display: grid; grid-template-columns: repeat(var(--cols, 3), var(--box)); gap: 1rem; margin-top: 1.25rem;
+  justify-content: center; }
+.where-pick { min-width: 0; white-space: normal; display: flex; flex-direction: column; align-items: flex-start;
+  justify-content: center; gap: .375rem; min-height: 7rem; padding: 1rem 1.25rem; text-align: left;
+  text-transform: none; letter-spacing: 0; }
+.where-pick .t, .where-pick .body { max-width: 100%; overflow-wrap: anywhere; }
 .where-pick .t { font-size: 1.5rem; font-weight: 700; }
 .where-pick .body { font-size: 1.125rem; opacity: .85; }
 .where-pick.primary .body { color: inherit; opacity: .75; }
+.where .confirm-actions { justify-content: center; }
+.where #where-cancel { width: var(--box); min-height: 4.25rem; background: transparent; }

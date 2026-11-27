@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import json
 import os
+import re
 import platform
 import shutil
 import subprocess
@@ -31,6 +33,19 @@ MAX_LINKS = 4
 def phone_logo(cfg: dict) -> Path:
     """The photographer's logo for the phone page. Kept on this tablet only."""
     return config.data_dir(cfg) / "phone-logo.png"
+
+
+def watermark_lines(cfg: dict) -> list:
+    """The watermark's two lines as set; until they are set, your name and website."""
+    from .watermark import clean_lines
+
+    kept = cfg.get("watermark_lines")
+    if isinstance(kept, list):
+        return clean_lines(kept)
+    site = web_address(cfg.get("owner_website") or "")
+    site = site.split("://", 1)[1].rstrip("/") if site else ""
+    name = (cfg.get("owner_name") or "").strip()
+    return clean_lines([("\u00a9 " + name) if name else "", site])
 
 
 def web_address(text: str) -> str:
@@ -86,6 +101,12 @@ def save_logo(cfg: dict, data: bytes) -> str:
 AUTOSTART = Path(os.path.expanduser("~/.config/autostart/doubletake.desktop"))
 
 
+def _power_mode() -> str:
+    from . import powerctl
+
+    return powerctl.get_mode()
+
+
 def public(cfg: dict) -> dict:
     """What the settings screen shows."""
     second = cfg.get("second_copy", "auto")
@@ -95,6 +116,9 @@ def public(cfg: dict) -> dict:
         "cockpit_theme": cfg.get("cockpit_theme") if cfg.get("cockpit_theme") in COCKPIT_THEMES else "cockpit",
         "screen_dark_after": int(cfg.get("screen_dark_after", 5)),
         "sleep_on_battery": int(cfg.get("sleep_on_battery", 30)),
+        "sleep_on_charger": int(cfg.get("sleep_on_charger", 60)),
+        "power_button": cfg.get("power_button") if cfg.get("power_button") in ("sleep", "off") else "sleep",
+        "power_mode": _power_mode(),
         "auto_backup": bool(cfg.get("auto_backup", False)),
         "auto_dark": bool(cfg.get("auto_dark", True)),
         "auto_chime": bool(cfg.get("auto_chime", True)),
@@ -127,6 +151,8 @@ def public(cfg: dict) -> dict:
         "owner_website": cfg.get("owner_website") or "",
         "phone_links": [dict(link) for link in cfg.get("phone_links") or []][:MAX_LINKS],
         "phone_logo": phone_logo(cfg).is_file(),
+        "watermark": bool(cfg.get("watermark", False)),
+        "watermark_lines": (watermark_lines(cfg) + ["", ""])[:2],
         "multi_camera": bool(cfg.get("multi_camera", False)),
         "welcome": bool(cfg.get("welcome", False)),
         "about": about(cfg),
@@ -139,10 +165,21 @@ def apply(cfg: dict, changes: dict) -> str:
     for key, value in changes.items():
         if key == "theme" and value in THEMES:
             clean[key] = value
-        elif key == "screen_dark_after" and value in (0, 2, 5, 10):
+        elif key == "screen_dark_after" and value in (0, 2, 5, 10, 30):
             clean[key] = value
-        elif key == "sleep_on_battery" and value in (0, 15, 30, 60):
+        elif key in ("sleep_on_battery", "sleep_on_charger") and value in (0, 15, 30, 60):
             clean[key] = value
+        elif key == "power_button" and value in ("sleep", "off"):
+            clean[key] = value
+            from . import powerctl
+
+            powerctl.gnome_button(value)  # the Maintenance desktop does the same
+        elif key == "power_mode":
+            # The system's own setting, not kept here: set straight away.
+            from . import powerctl
+
+            if value not in powerctl.MODES or not powerctl.set_mode(value):
+                return "The power mode could not be changed on this tablet."
         elif key in ("auto_backup", "auto_dark", "auto_chime") and isinstance(value, bool):
             clean[key] = value
         elif key == "copy_what" and value in ("raw", "raw_jpeg", "all"):
@@ -193,7 +230,16 @@ def apply(cfg: dict, changes: dict) -> str:
             clean[key] = value
         elif key == "viewer_zoom" and value in (50, 75, 100):
             clean[key] = value
-        elif key in ("viewer_info", "multi_camera", "welcome") and isinstance(value, bool):
+        elif key == "watermark_lines" and isinstance(value, list) and len(value) <= 2:
+            if not all(isinstance(v, str) for v in value):
+                return "Not a line of text."
+            lines = [" ".join(v.split()) for v in value]
+            if any(len(v) > 60 for v in lines):
+                return "That is too long: a line can have up to 60 letters."
+            if any(not v.isprintable() for v in lines):
+                return "That has a character it cannot keep."
+            clean[key] = (lines + ["", ""])[:2]
+        elif key in ("viewer_info", "multi_camera", "welcome", "watermark") and isinstance(value, bool):
             clean[key] = value
         elif key in ("owner_name", "owner_website") and isinstance(value, str):
             value = " ".join(value.split())
@@ -266,6 +312,191 @@ def _libraries() -> tuple:
     return camera, image
 
 
+def _user_name() -> str:
+    """The tablet's user (the one that signs in to Maintenance mode and owns the photos)."""
+    try:
+        import pwd
+
+        return pwd.getpwuid(os.getuid()).pw_name
+    except (ImportError, KeyError):
+        return os.environ.get("USER", "")
+
+
+# The tablet's parts for About, read the way any user can (no helper, nothing as root).
+
+def _processor(root: str = "/") -> str:
+    """'Intel Core i7-8650U, 4 cores, 8 threads'."""
+    try:
+        text = Path(root, "proc/cpuinfo").read_text()
+    except OSError:
+        return ""
+    model = cores = ""
+    for line in text.splitlines():
+        key, _, value = line.partition(":")
+        key, value = key.strip(), value.strip()
+        if key == "model name" and not model:
+            model = value
+        elif key == "cpu cores" and not cores:
+            cores = value
+    model = re.sub(r"\((R|TM|tm|r)\)|\bCPU\b|@.*$", "", model)
+    model = re.sub(r"\s+", " ", model).strip()
+    threads = text.count("\nprocessor") + (1 if text.startswith("processor") else 0)
+    parts = [model] if model else []
+    if cores.isdigit():
+        parts.append(f"{cores} cores")
+    if threads and str(threads) != cores:
+        parts.append(f"{threads} threads")
+    return ", ".join(parts)
+
+
+_SIZES_GB = (1, 2, 3, 4, 6, 8, 12, 16, 24, 32, 48, 64, 96, 128)
+
+
+def _memory(root: str = "/") -> str:
+    """'16 GB': the size fitted (the system reports a little less, some kept for graphics)."""
+    try:
+        for line in Path(root, "proc/meminfo").read_text().splitlines():
+            if line.startswith("MemTotal:"):
+                gib = int(line.split()[1]) / 1048576
+                fitted = next((s for s in _SIZES_GB if s >= gib - 0.05), round(gib))
+                return f"{fitted} GB"
+    except (OSError, ValueError, IndexError):
+        pass
+    return ""
+
+
+def _size_text(n: int) -> str:
+    gb = n / 1e9
+    return f"{gb / 1000:.1f} TB" if gb >= 1000 else f"{gb:.0f} GB"
+
+
+def _drive(path: str, root: str = "/") -> str:
+    """The drive the photos are on: 'Micron 2200S NVMe 1024GB, 1.0 TB, PCIe 3.0 x4'."""
+    try:
+        dev = os.stat(path).st_dev
+    except OSError:
+        return ""
+    sysb = Path(root, "sys/dev/block", f"{os.major(dev)}:{os.minor(dev)}")
+    try:
+        here = sysb.resolve(strict=True)
+        for _ in range(4):  # LVM (and encryption) sit on top: follow to the real disk
+            slaves = sorted((here / "slaves").iterdir()) if (here / "slaves").is_dir() else []
+            if not slaves:
+                break
+            here = slaves[0].resolve()
+        if (here / "partition").exists():
+            here = here.parent
+    except OSError:
+        return ""
+
+    def read(p):
+        try:
+            return p.read_text().strip()
+        except OSError:
+            return ""
+
+    model = re.sub(r"\s+", " ", read(here / "device" / "model"))
+    parts = [model] if model else []
+    try:
+        parts.append(_size_text(int(read(here / "size") or 0) * 512))
+    except ValueError:
+        pass
+    if here.name.startswith("nvme"):
+        pci = (here / "device" / "device")
+        speed, width = read(pci / "current_link_speed"), read(pci / "current_link_width")
+        gen = {"2.5": "1.0", "5.0": "2.0", "8.0": "3.0", "16.0": "4.0", "32.0": "5.0"}.get(speed.split(" ")[0], "")
+        if gen:
+            parts.append(f"PCIe {gen} x{width}" if width else f"PCIe {gen}")
+    elif "/ata" in str(here):
+        parts.append("SATA")
+    return ", ".join(p for p in parts if p and p != "0 GB")
+
+
+# The maker's number a microSD card carries (its CID), for the common makers; others show no maker.
+_SD_MAKERS = {0x01: "Panasonic", 0x02: "Kioxia", 0x03: "SanDisk", 0x1b: "Samsung", 0x1d: "ADATA",
+              0x28: "Lexar", 0x31: "Silicon Power", 0x41: "Kingston", 0x74: "Transcend",
+              0x76: "Patriot", 0x82: "Sony"}
+_USB_SPEEDS = {"480": "USB 2.0", "5000": "USB 3 (5 Gb/s)", "10000": "USB 3 (10 Gb/s)",
+               "20000": "USB 3 (20 Gb/s)"}
+
+
+def copy2_hardware(device: str, root: str = "/") -> str:
+    """The card or drive Copy 2 is on, as it describes itself (anyone can read this):
+    'SanDisk SN512 microSD, 512 GB, made 03/2025' or 'Samsung PSSD T7, 1.0 TB, USB 3 (10 Gb/s)'."""
+    name = os.path.basename(device or "")
+    if not name:
+        return ""
+    disk = re.sub(r"p?\d+$", "", name) if name.startswith(("mmcblk", "nvme")) else re.sub(r"\d+$", "", name)
+    here = Path(root, "sys/block", disk)
+
+    def read(p):
+        try:
+            return re.sub(r"\s+", " ", p.read_text()).strip()
+        except OSError:
+            return ""
+
+    parts = []
+    if disk.startswith("mmcblk"):
+        dev = here / "device"
+        try:
+            maker = _SD_MAKERS.get(int(read(dev / "manfid") or "0", 16), "")
+        except ValueError:
+            maker = ""
+        kind = "microSD" if read(dev / "type") in ("SD", "") else read(dev / "type")
+        parts.append(" ".join(x for x in (maker, read(dev / "name"), kind) if x))
+        try:
+            parts.append(_size_text(int(read(here / "size") or 0) * 512))
+        except ValueError:
+            pass
+        made = read(dev / "date")
+        if re.fullmatch(r"\d{2}/\d{4}", made):
+            parts.append("made " + made)
+    else:
+        model = " ".join(x for x in (read(here / "device" / "vendor"), read(here / "device" / "model")) if x)
+        parts.append(model)
+        try:
+            parts.append(_size_text(int(read(here / "size") or 0) * 512))
+        except ValueError:
+            pass
+        try:  # the USB link: the nearest 'speed' above the disk in sysfs
+            up = here.resolve(strict=True)
+            while up != up.parent:
+                if (up / "speed").is_file() and (up / "idVendor").is_file():
+                    speed = _USB_SPEEDS.get(read(up / "speed"))
+                    if speed:
+                        parts.append(speed)
+                    break
+                up = up.parent
+        except OSError:
+            pass
+    return ", ".join(p for p in parts if p and p != "0 GB")
+
+
+TABLET_FILE = "/etc/doubletake/tablet.json"  # written by the helper at setup, as root
+
+
+def _tablet_details(path: str = TABLET_FILE) -> dict:
+    try:
+        found = json.loads(Path(path).read_text())
+        return found if isinstance(found, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def _memory_text(size: str, details: dict) -> str:
+    """'16 GB DDR4, 2400 MT/s, Samsung' (the parts only root can read, when setup wrote them)."""
+    first = " ".join(x for x in (size, str(details.get("memory_type") or "")) if x)
+    rest = [str(details.get(k) or "") for k in ("memory_speed", "memory_maker")]
+    return ", ".join(x for x in [first] + rest if x)
+
+
+def _serial_text(details: dict) -> str:
+    serial = str(details.get("serial") or "")
+    if serial and str(details.get("vendor") or "").lower().startswith("dell"):
+        serial += " (Dell service tag)"
+    return serial
+
+
 def about(cfg: dict | None = None) -> dict:
     def read(path):
         try:
@@ -274,6 +505,7 @@ def about(cfg: dict | None = None) -> dict:
             return ""
 
     camera, image = _libraries()
+    details = _tablet_details()
     system = ""
     for row in read("/etc/os-release").splitlines():
         if row.startswith("PRETTY_NAME="):
@@ -285,6 +517,12 @@ def about(cfg: dict | None = None) -> dict:
         "system": system or platform.platform(),
         "python": platform.python_version(),
         "host": platform.node().split(".")[0],
+        "user": _user_name(),
+        "processor": _processor(),
+        "memory": _memory_text(_memory(), details),
+        "serial": _serial_text(details),
+        "drive": _drive(str(Path(cfg.get("library") or config.default_library()).expanduser())
+                        if cfg is not None else os.path.expanduser("~")),
         "camera_lib": camera,
         "image_lib": image,
         "program": str(Path(__file__).resolve().parent.parent),

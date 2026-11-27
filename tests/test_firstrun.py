@@ -72,5 +72,33 @@ class FirstRunTests(unittest.TestCase):
         self.assertIn("Nothing was changed", firstrun.system_setup(str(self.home / "P"), run=run))
 
 
+
+class ApplianceSetupTests(unittest.TestCase):
+    def setUp(self):
+        self.home = tempfile.mkdtemp(prefix="doubletake-appl-")
+        self.addCleanup(shutil.rmtree, self.home, True)
+        p = mock.patch.dict("os.environ", {"XDG_CONFIG_HOME": self.home})
+        p.start()
+        self.addCleanup(p.stop)
+
+    def setup(self):
+        from doubletake import cli, config, poweron
+
+        with mock.patch.object(poweron, "switch", lambda *a: ""), mock.patch.object(kiosk, "switch", lambda on: ""):
+            self.assertEqual(cli.cmd_appliance_setup(SimpleNamespace(), config.load()), 0)
+        return config.load()
+
+    def test_an_appliance_hotspot_is_named_doubletake_hs(self):
+        cfg = self.setup()
+        self.assertEqual(cfg["hotspot_name"], "DoubleTake_HS")
+        self.assertTrue(cfg["welcome"])
+
+    def test_a_hotspot_name_already_chosen_is_kept(self):
+        from doubletake import config
+
+        config.save({"hotspot_name": "Nick's tablet"})
+        self.assertEqual(self.setup()["hotspot_name"], "Nick's tablet")
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -122,6 +122,59 @@ def change_brightness(key: str) -> dict:
     return {"level": level}
 
 
+BOUNCE = (25, 50, 75, 100)  # the 7212's rotate button: these levels, up to the top and back down
+
+
+def next_bounce(now: int, going_up: bool) -> tuple:
+    """The next level from `now`, and which way the press after it goes: at the top it turns
+    down, at 25% up."""
+    above = [x for x in BOUNCE if x > now]
+    below = [x for x in BOUNCE if x < now]
+    if going_up and not above:
+        going_up = False
+    elif not going_up and not below:
+        going_up = True
+    level = above[0] if going_up else below[-1]
+    # At an end, the arrow shown already points the way the next press goes.
+    if level == BOUNCE[-1]:
+        going_up = False
+    elif level == BOUNCE[0]:
+        going_up = True
+    return level, going_up
+
+
+def bounce_brightness(going_up: bool, root=None, last: int | None = None) -> tuple:
+    """One press of the rotate button: ({'level', 'kind', 'up'} or {'error'}, going_up).
+    `last` is the level the previous press set, when it was moments ago: the power service
+    may still report the old level, or round it (75 back as 74).
+    The next level is worked out once, then set through the power service or, without one,
+    the login service. (Worked out again for the second way, from the backlight and with the
+    direction already turned, it went 50, 75, 50, 75 on the FZ-M1, which has no power
+    service's brightness: Nick, 2026-11-25.)"""
+    # A press soon after the last one goes on from where that one put it, without asking the
+    # power service (slow on the 7212, and it may still report the old level).
+    now = last if last is not None else screen.brightness()
+    found = None
+    if now is None:
+        found = _backlight(root)  # no power service: the backlight itself
+        if found:
+            now = round(100 * found[1] / found[2])
+    if now is None:
+        return {"error": "The brightness could not be changed here."}, going_up
+    level, after = next_bounce(now, going_up)
+    if screen.set_brightness(level):
+        return {"level": level, "kind": "brightness", "up": after}, after
+    found = found or _backlight(root)  # through the login service, as the keys do
+    if found and shutil.which("busctl"):
+        name, _, top = found
+        code, _ = _run(["busctl", "call", "org.freedesktop.login1", "/org/freedesktop/login1/session/auto",
+                        "org.freedesktop.login1.Session", "SetBrightness", "ssu", "backlight", name,
+                        str(max(1, top * level // 100))])
+        if code == 0:
+            return {"level": level, "kind": "brightness", "up": after}, after
+    return {"error": "The brightness could not be changed here."}, going_up
+
+
 def press(key: str) -> dict:
     """One press of a volume or brightness key: {'kind', 'level', 'muted'} for the screens'
     small level display, or {'error'}."""

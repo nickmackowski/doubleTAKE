@@ -18,7 +18,7 @@ import time
 from contextlib import contextmanager
 from pathlib import Path
 
-from . import __version__, awake, bluetooth, cards, config, device, direct, editor, firstrun, kiosk, naming, screen, nas, network, phone, photos, power, poweron, retention, settings, usb
+from . import __version__, awake, bluetooth, cards, config, device, direct, editor, firstrun, kiosk, naming, screen, nas, network, phone, photos, power, powerctl, poweron, retention, settings, updates, usb, watermark
 from .ingest import BackupError, Reporter, copy_choice, coverage, make_plan, join_folder, next_shoot_folder, run_backup, shoot_slug
 from .ledger import Ledger
 from .mirror import run_mirror
@@ -32,6 +32,8 @@ TICK_SECONDS = 2.0
 CAMERA_BATTERY_EVERY = 60.0  # seconds between looks at an idle camera's battery
 AUTO_COUNTDOWN = 10.0        # seconds to cancel an unattended backup before it starts
 AUTO_DARK_AFTER = 60.0       # seconds the result of an unattended backup stays on the screen
+NAS_GRACE = 120.0            # seconds the tablet stays awake after a computer last had NAS files open
+POWER_KEY_DEBOUNCE = 1.5     # seconds within which a second power button press is the same press
 SPLASH_THEME = Path("/usr/share/plymouth/themes/doubletake/doubletake.plymouth")
 
 
@@ -153,7 +155,8 @@ class Station:
         self.direct = direct.DirectCable()
         self.direct_state = {"active": False, "device": "", "waiting": False, "error": ""}
         self.usb_job = {"busy": False, "done": 0, "total": 0, "current": "", "error": "", "message": "", "mount": ""}
-        self.export_job = {"busy": False, "done": 0, "total": 0, "current": "", "error": "", "message": "", "shoot": ""}
+        self.export_job = {"busy": False, "done": 0, "total": 0, "current": "", "error": "", "message": "", "shoot": "",
+                           "run": 0}
         self.nas = {"installed": False}
         self.nas_job = {"busy": False, "message": "", "error": ""}
         self.splash_job = {"busy": False, "error": ""}
@@ -168,6 +171,13 @@ class Station:
         self._touch_at = time.time()  # the last touch on the screen, or the camera plugged in
         self.screen_dark = False
         self.awake = awake.StayAwake()
+        self.button = powerctl.HoldButton()  # the power button, held from the system (powerctl)
+        self.power_pending = ""   # "sleep" or "off", waiting for a backup to finish
+        self.update = updates.waiting()  # a newer DoubleTake or system updates, found while running
+        self._update_thread = None
+        self._update_at = 0.0
+        self._power_key_at = 0.0
+        self._nas_used_at = 0.0   # when a computer last had files open on the NAS
         self._tx = (0.0, 0)  # (time, bytes sent) at the last look, for the NAS's sending speed
 
         self._holding = False  # the second copy is held off while shoots are being cleared
@@ -188,6 +198,7 @@ class Station:
     def start(self) -> None:
         try:
             poweron.refresh(self.cfg, getpass.getuser())
+            powerctl.gnome_button(self.cfg.get("power_button", "sleep"))  # the desktop does the same
         except Exception:
             pass  # the desktop settings are a convenience; the engine runs without them
         try:
@@ -215,6 +226,7 @@ class Station:
             self.keys.stop()
             self.keys = None
         self.awake.hold(False)
+        self.button.release()
         self.phone_stop()
         self.stop_backup.set()
         self.stop_mirror.set()
@@ -317,19 +329,32 @@ class Station:
             if quiet_since and time.time() - quiet_since >= AUTO_DARK_AFTER:
                 self.screen_dark = screen.set_power(False)
 
-    def _idle(self, busy: bool) -> None:
-        """With no touch for a while: the screen goes dark, and on battery the tablet sleeps.
-
-        Never while photos are on the move. A touch, or the camera, lights it again.
-        """
+    def _quiet(self) -> float:
+        """Seconds since the tablet was last used: a touch on DoubleTake's screens, the camera,
+        or (asked of the desktop) any touch, key or mouse at all."""
         quiet = time.time() - self._touch_at
+        if quiet >= 60:  # only asked once it matters (the shortest wait is two minutes)
+            seen = powerctl.idle_seconds()
+            if seen is not None:
+                quiet = min(quiet, seen)
+        return quiet
+
+    def _idle(self, busy: bool) -> None:
+        """With no touch for a while: the screen goes dark, and the tablet sleeps, on battery
+        or on the charger, each after its own wait (Settings, Display).
+
+        Never while photos are on the move, a computer copies from the NAS, phones are being
+        sent photos, or the system updates. A touch, or the camera, lights it again.
+        """
+        quiet = self._quiet()
         b = self.backup
         dark_after = int(self.cfg.get("screen_dark_after", 5) or 0) * 60
         if dark_after and quiet >= dark_after and not self.screen_dark and not (b and b.get("running")):
             self.screen_dark = screen.set_power(False)
-        sleep_after = int(self.cfg.get("sleep_on_battery", 30) or 0) * 60
         on_power = bool((self.tablet or {}).get("on_power", True))
-        if sleep_after and quiet >= sleep_after and not busy and not on_power and self.tablet:
+        key = "sleep_on_charger" if on_power else "sleep_on_battery"
+        sleep_after = int(self.cfg.get(key, 60 if on_power else 30) or 0) * 60
+        if sleep_after and quiet >= sleep_after and not busy and self.tablet:
             self._touch_at = time.time()  # after waking, the count starts again
             if not screen.suspend():
                 print("doubletake: the tablet would not go to sleep (systemctl suspend refused)",
@@ -338,9 +363,68 @@ class Station:
     # ----- the tablet's own keys (keys.py) -----------------------------------------
 
     def on_key(self, key: str) -> None:
-        if key.startswith("brightness"):
-            return self.brightness_key(key)
+        if key == "have":
+            # The helper reads the power button here: hold it from the system, so a press
+            # comes to DoubleTake alone (powerctl). Not before: a held button nobody reads
+            # would do nothing at all.
+            if "power" in getattr(self.keys, "have", set()):
+                self.button.hold()
+            return
+        if key == "power":
+            return self.power_key()
+        if key in ("windows", "windows_up"):
+            return self.windows_key(key == "windows")
+        if key == "rotate":
+            return self.rotate_key()
+        if key.startswith("brightness") or key.startswith("volume"):
+            return self.brightness_key(key)  # (and the volume: the same, through media.press)
         {"p1": self.one_touch_backup, "p2": self.toggle_night_red, "p3": self.toggle_status}[key]()
+
+    WINDOWS_HOLD = 2.0  # seconds: held this long, the Windows button turns the screen off
+
+    def windows_key(self, down: bool) -> None:
+        """The Windows button: a short press, the Home screen (from anywhere, the screen lit);
+        held 2 seconds, the screen off (a touch or a press lights it again)."""
+        if down:
+            self._windows_at = time.time()
+            timer = threading.Timer(self.WINDOWS_HOLD, self._windows_held, args=(self._windows_at,))
+            timer.daemon = True
+            self._windows_timer = timer
+            timer.start()
+            return
+        timer, self._windows_timer = getattr(self, "_windows_timer", None), None
+        if timer is None:
+            return  # let go after the hold: already done
+        timer.cancel()
+        self.wake_screen()
+        with self.lock:
+            self.home_id = int(getattr(self, "home_id", 0)) + 1
+            self.status_open = False
+
+    def _windows_held(self, pressed_at: float) -> None:
+        if getattr(self, "_windows_at", None) != pressed_at or getattr(self, "_windows_timer", None) is None:
+            return
+        self._windows_timer = None
+        self.screen_dark = screen.set_power(False)
+
+    BOUNCE_RECENT = 30.0  # seconds: presses this close go on from the level the last one set
+
+    def rotate_key(self) -> None:
+        """The 7212's rotate button: the brightness in steps of 25%, up to full and back down
+        to 25% (the 7212 has no brightness keys). The screens show the level, and which way."""
+        if not kiosk.in_kiosk():
+            return
+        from . import media
+
+        self.wake_screen()
+        recent = time.time() - getattr(self, "_bounce_at", 0.0) < self.BOUNCE_RECENT
+        got, self._bounce_up = media.bounce_brightness(getattr(self, "_bounce_up", True),
+                                                       last=getattr(self, "_bounce_level", None) if recent else None)
+        if got.get("level") is not None:
+            self._bounce_level, self._bounce_at = got["level"], time.time()
+            with self.lock:
+                self.level_shown = {"id": int((self.level_shown or {}).get("id", 0)) + 1, "kind": "brightness",
+                                    "level": got["level"], "muted": False, "up": got["up"]}
 
     def brightness_key(self, key: str) -> None:
         """The screen's brightness keys, in DoubleTake only (on the desktop, the desktop's own
@@ -403,6 +487,52 @@ class Station:
         else:
             settings.apply(self.cfg, {key: red, f"night_red_from_{look}": theme})
         self.wake_screen()
+
+    # ----- the power button (powerctl) ----------------------------------------------------
+
+    def power_key(self) -> None:
+        """The power button: sleep or turn off, as Settings says, with no question. During a
+        backup, once the backup is done and both copies are verified; pressed again, not."""
+        now = time.time()
+        if now - self._power_key_at < POWER_KEY_DEBOUNCE:
+            return  # one press can arrive twice (two devices report the button)
+        self._power_key_at = now
+        if self.power_pending:
+            self.cancel_power()
+            return
+        action = self.cfg.get("power_button", "sleep")
+        if action not in powerctl.BUTTON:
+            action = "sleep"
+        b = self.backup
+        copying = (bool(b and b.get("running")) or self._alive(self._mirror_thread)
+                   or bool(self.usb_job.get("busy")) or bool(self.export_job.get("busy")))
+        if copying:
+            with self.lock:
+                self.power_pending = action
+            self.screen_dark = screen.set_power(False)
+            self.wake.set()
+            return
+        self._power_now(action)
+
+    def cancel_power(self) -> None:
+        with self.lock:
+            self.power_pending = ""
+        self.wake_screen()
+        self.wake.set()
+
+    def _power_tick(self, copying: bool) -> None:
+        if self.power_pending and not copying:
+            action = self.power_pending
+            with self.lock:
+                self.power_pending = ""
+            self._power_now(action)
+
+    def _power_now(self, action: str) -> None:
+        if self.phone_share is not None:
+            self.phone_stop()
+        self._touch_at = time.time()  # after waking, the count starts again
+        if not powerctl.act(action):
+            print(f"doubletake: the power button could not {action} the tablet", file=sys.stderr, flush=True)
 
     def wake_screen(self) -> None:
         """Light the screen again (the camera was plugged in, or the screen was touched)."""
@@ -583,6 +713,38 @@ class Station:
         finally:
             ledger.close()
 
+    UPDATE_TICK = 600.0  # every 10 minutes, see whether a quiet look for updates is due
+
+    def _update_tick(self, copying: bool) -> None:
+        """Look for updates now and then: on a trusted network, never while photos are copied."""
+        now = time.time()
+        if copying or self._alive(self._update_thread) or now - self._update_at < self.UPDATE_TICK:
+            return
+        self._update_at = now
+        if updates.off(self.cfg) or not self._trusted_network():
+            return
+
+        def run():
+            found = updates.look(self.cfg)
+            with self.lock:
+                self.update = found
+
+        self._update_thread = threading.Thread(target=run, name="updates", daemon=True)
+        self._update_thread.start()
+
+    def _trusted_network(self) -> bool:
+        """Online through a cable, or a Wi-Fi network trusted for the NAS. Never the hotspot."""
+        try:
+            found = nas.mark_reach(nas.addresses(), self.cfg)
+        except Exception:
+            return False
+        return any(a["open"] and a["kind"] in ("cable", "wifi") for a in found)
+
+    def update_later(self) -> None:
+        updates.later()
+        with self.lock:
+            self.update = updates.waiting()
+
     def _tick(self, ledger: Ledger) -> None:
         # With no desktop to open cards and drives (DoubleTake only), open them here.
         if self._ticks % 3 == 0 and kiosk.in_kiosk():
@@ -607,13 +769,20 @@ class Station:
         self._was_present = present
         self._idle_camera_battery(present)
         self._auto_tick()
-        # No sleep while photos are on the move.
+        # No sleep while photos are on the move, a computer is copying from the NAS, phones
+        # are being sent photos, or the system is updating.
         b = self.backup
-        busy = (bool(b and b.get("running")) or self._alive(self._mirror_thread)
-                or bool(self.usb_job.get("busy")) or bool(self.export_job.get("busy"))
-                or bool(self.auto and self.auto.get("state") == "countdown"))
+        copying = (bool(b and b.get("running")) or self._alive(self._mirror_thread)
+                   or bool(self.usb_job.get("busy")) or bool(self.export_job.get("busy"))
+                   or bool(self.auto and self.auto.get("state") == "countdown"))
+        if nas.in_use():
+            self._nas_used_at = time.time()
+        busy = (copying or time.time() - self._nas_used_at < NAS_GRACE
+                or self.phone_share is not None or powerctl.updating())
         self.awake.hold(busy)
+        self._power_tick(copying)
         self._idle(busy)
+        self._update_tick(copying)
 
         # The card for the second copy.
         found = cards.detect(self.cfg, ledger)
@@ -624,7 +793,7 @@ class Station:
         if found.card is not None:
             c = found.card
             info.update(label=c.label, noun=c.noun, style=c.style, total=c.total, free=c.free, mount=str(c.mount),
-                        fstype=c.fstype, folder=str(c.root))
+                        fstype=c.fstype, folder=str(c.root), hardware=self._copy2_hardware(c.device))
         if ready:
             held, left, left_bytes = ledger.copy_totals(found.card.card_id)
             info.update(held=held, waiting=left, waiting_bytes=left_bytes)
@@ -665,6 +834,9 @@ class Station:
         shoots = [{"id": r["id"], "folder": r["folder"], "name": r["name"], "date": r["date"],
                    "files": r["verified"], "failed": r["failed"], "mirrored": r["mirrored"], "bytes": r["bytes"],
                    "imported": bool(r["imported"]), "cover": ledger.cover(r["id"])} for r in rows[:4]]
+        turned = editor.turns(self.data_dir) if shoots else {}
+        for s in shoots:
+            s["cover_turn"] = turned.get(s["cover"], 0) if s["cover"] else 0
         names = ledger.recent_names(4)
 
         # May the camera's cards be formatted?
@@ -789,13 +961,21 @@ class Station:
         tablet = self.tablet or {}
         return power.problem(self.camera.get("battery"), tablet.get("battery"), bool(tablet.get("on_power")))
 
+    def _copy2_hardware(self, device: str) -> str:
+        """What the card or drive says it is, for About; read once per card, not every look."""
+        cached = getattr(self, "_hardware_for", None)
+        if not cached or cached[0] != device:
+            self._hardware_for = (device, settings.copy2_hardware(device))
+        return self._hardware_for[1]
+
     # A backup soon after another: add to a recent import, or start a new one?
     RECENT_HOURS = 12
     RECENT_MAX = 5
 
     def backup_choices(self) -> dict:
         """What Start asks. ask: show the box; choices: imports from the last 12 hours, up to
-        five, the latest first; new: the folder a new import would get. The second camera of
+        five, in the order they were made (the 01, 02, ... order, so New folder follows the
+        newest; Nick 2026-11-25); new: the folder a new import would get. The second camera of
         a two-camera event goes into the first one's import without asking."""
         name = shoot_slug("")
         with self._ledger() as ledger:
@@ -810,11 +990,22 @@ class Station:
                     continue
                 cameras = [m for _, m in ledger.shoot_cameras(row["id"])]
                 choices.append({"folder": row["folder"], "time": row["last"], "photos": row["photos"],
-                                "cameras": " + ".join(c for c in cameras if c)})
+                                "cameras": " + ".join(c for c in cameras if c), "_made": row["id"]})
                 if len(choices) >= self.RECENT_MAX:
-                    break
-            new = next_shoot_folder(self.library, local_date(time.time()), name, ledger)
+                    break  # the five most recently added to...
+            choices.sort(key=lambda c: c.pop("_made"))  # ...shown oldest import first
+            new = self._new_folder(ledger, name, [c["folder"] for c in choices])
         return {"ask": bool(choices), "choices": choices, "new": new, "joins": ""}
+
+    def _new_folder(self, ledger, name: str, recent: list) -> str:
+        """The folder "New folder" makes. A stopped import is carried on in its own folder,
+        but when the box already offers that import, New folder means a new one (the box
+        once showed 2026_1117_import_01 twice: as the import, and as New folder)."""
+        today = local_date(time.time())
+        folder = next_shoot_folder(self.library, today, name, ledger)
+        if folder in recent:
+            folder = next_shoot_folder(self.library, today, name, ledger, carry_on=False)
+        return folder
 
     def start_backup(self, name: str, folder: str | None = None) -> str:
         """Start a backup. Returns why not, or ''. folder: a recent import to add to, '' for a
@@ -883,9 +1074,13 @@ class Station:
                     if joined:
                         with self.lock:
                             job.update(joined=joined[0], joined_with=joined[1])
+                    folder = joined[0] if joined else None
+                    if chosen == "" and not joined:  # New folder, picked in the box
+                        recent = [r["folder"] for r in ledger.recent_shoots(time.time() - self.RECENT_HOURS * 3600)]
+                        folder = self._new_folder(ledger, name, recent)
                     result = run_backup(source, self.cfg, ledger, name,
                                         reporter=_Progress(self, job, self.stop_backup, source), plan=plan,
-                                        folder=joined[0] if joined else None)
+                                        folder=folder)
                     try:
                         self._take_plan(make_plan(source, ledger, limit=self.limit, copy=copy_choice(self.cfg)))
                     except SourceError:
@@ -927,7 +1122,7 @@ class Station:
                 cover = ledger.cover(row["id"]) if row else None
             found = self.photo_file(cover) if cover else None
             if found:
-                photos.picture(found[0], "thumb", found[1])
+                photos.picture(found[0], "thumb", found[1], editor.turn_of(self.data_dir, cover))
         except Exception:
             pass  # only a convenience: the picture is made when it is first asked for
 
@@ -1067,7 +1262,8 @@ class Station:
     def library_view(self) -> dict:
         now = time.time()
         with self._ledger() as ledger:
-            rows = ledger.list_shoots()
+            # A deleted shoot is forgotten; one still waiting for its Copy 2 card is never shown.
+            rows = [r for r in ledger.list_shoots() if not r["cleared"]]
             shoots = []
             for r in rows:
                 from_t = retention.deletable_from(ledger, r["id"]) if not r["cleared"] else 0
@@ -1081,7 +1277,11 @@ class Station:
                         (("today " if time.localtime(from_t).tm_yday == time.localtime(now).tm_yday else
                           time.strftime("%a ", time.localtime(from_t))) + clock_text(from_t)),
                     "cover": None if r["cleared"] else ledger.cover(r["id"]),
+                    "cover_turn": 0,
                 })
+        turned = editor.turns(self.data_dir)
+        for s in shoots:
+            s["cover_turn"] = turned.get(s["cover"], 0) if s["cover"] else 0
         here = [s for s in shoots if not s["cleared"]]
         with self.lock:
             card = copy.deepcopy(self.card)
@@ -1101,8 +1301,10 @@ class Station:
             files = [{"id": f["id"], "name": f["rel_name"] or f["src_name"], "taken": f["mtime"], "size": f["size"]}
                      for f in ledger.shoot_files(shoot_id) if f["status"] == "verified"]
         edited = editor.edited_ids(self.data_dir)
+        turned = editor.turns(self.data_dir)
         for f in files:
             f["edited"] = f["id"] in edited
+            f["turn"] = turned.get(f["id"], 0)
             f["exported"] = editor.export_path(self.library, shoot["folder"], f["name"]).is_file()
         return {"id": shoot["id"], "folder": shoot["folder"], "name": shoot["name"],
                 "cleared": shoot["cleared"] is not None, "files": [] if shoot["cleared"] else files}
@@ -1122,7 +1324,7 @@ class Station:
             return None
         path = found[0]
         info = photos.read_details(path)
-        size = photos.full_size(path)
+        size = photos.full_size(path, editor.turn_of(self.data_dir, file_id))
         info.update(name=path.name, width=size[0] if size else 0, height=size[1] if size else 0)
         return info
 
@@ -1182,10 +1384,18 @@ class Station:
         if found is None:
             return None
         path, cache = found
-        screen = photos.picture(path, "screen", cache)
+        screen = photos.picture(path, "screen", cache, editor.turn_of(self.data_dir, file_id))
         if screen is None:
             return None
         return editor.preview(screen, params, crop=crop)
+
+    def turn_photo(self, file_id: int) -> dict:
+        """The Rotate button: the photo turned 90° clockwise more, in DoubleTake only. The file
+        itself never changes (its checksum on both copies must keep matching)."""
+        if self._photo_row(file_id) is None:
+            return {"error": "That photo is not on the tablet."}
+        turn = editor.turn_once(self.data_dir, file_id)
+        return {"turn": turn, "params": editor.load(self.data_dir, file_id)}
 
     def start_export(self, ids: list, size: str, quality: str) -> str:
         if size not in editor.SIZES or quality not in editor.QUALITIES:
@@ -1196,8 +1406,10 @@ class Station:
         with self.lock:
             if self.export_job["busy"]:
                 return "Already exporting. Wait for it to finish."
+            # "run" counts the exports, so a screen can tell its own from an earlier one.
             self.export_job = {"busy": True, "done": 0, "total": len(rows), "current": "", "error": "",
-                               "message": "", "shoot": Path(rows[0]["shoot_folder"]).name}
+                               "message": "", "shoot": Path(rows[0]["shoot_folder"]).name,
+                               "run": self.export_job.get("run", 0) + 1}
         threading.Thread(target=self._run_export, args=(rows, size, quality), name="export", daemon=True).start()
         return ""
 
@@ -1212,7 +1424,8 @@ class Station:
                 editor.export(path, editor.load(self.data_dir, row["id"]),
                               editor.export_path(self.library, row["shoot_folder"], name), size, quality,
                               owner={"name": self.cfg.get("owner_name") or "",
-                                     "website": self.cfg.get("owner_website") or ""})
+                                     "website": self.cfg.get("owner_website") or ""},
+                              turn=editor.turn_of(self.data_dir, row["id"]))
                 made += 1
             except Exception as exc:
                 problems.append(f"{name}: {exc}")
@@ -1272,7 +1485,8 @@ class Station:
         device = spot["device"]
         share = phone.PhoneShare(self.phone_files, spot["address"],
                                  on_stop=lambda: nas.helper("phone-port", "off", device),
-                                 brand=self._phone_brand, logo=settings.phone_logo(self.cfg))
+                                 brand=self._phone_brand, logo=settings.phone_logo(self.cfg),
+                                 mark=self.watermark_lines, marked=self._marked_folder())
         try:
             share.start()
         except OSError as exc:
@@ -1290,7 +1504,26 @@ class Station:
     def phone_preview(self):
         """The phone page as it would be now, without starting anything, for Settings."""
         return phone.PhoneShare(self.phone_files, "127.0.0.1",
-                                brand=self._phone_brand, logo=settings.phone_logo(self.cfg))
+                                brand=self._phone_brand, logo=settings.phone_logo(self.cfg),
+                                mark=self.watermark_lines, marked=self._marked_folder())
+
+    def watermark_lines(self) -> list:
+        """The watermark's lines when it is on; none when it is off."""
+        if not self.cfg.get("watermark"):
+            return []
+        return settings.watermark_lines(self.cfg)
+
+    def _marked_folder(self) -> Path:
+        return config.data_dir(self.cfg) / "phone-marked"
+
+    def watermark_preview(self) -> bytes:
+        """The watermark as it is set, on the newest export (or a plain picture), for Settings."""
+        lines = settings.watermark_lines(self.cfg)
+        for _, _, path in self.phone_files()[:1]:
+            body = watermark.marked_jpeg(Path(path), lines, longest=1400, quality=85)
+            if body is not None:
+                return body
+        return watermark.sample(lines)
 
     def _phone_brand(self) -> dict:
         return {"name": self.cfg.get("owner_name") or "", "website": self.cfg.get("owner_website") or "",
@@ -1787,6 +2020,11 @@ class Station:
                 "auto": dict(self.auto, left=max(0, int(round(self.auto["at"] - time.time()))))
                         if self.auto and self.auto.get("state") == "countdown" else (dict(self.auto) if self.auto else None),
                 "screen_dark": self.screen_dark,
+                "power_pending": self.power_pending,
+                "home_id": int(getattr(self, "home_id", 0)),
+                # The volume keys the helper reads: the screens then leave them alone (no double steps).
+                "keys_volume": "volume_up" in getattr(self.keys, "have", set()) if getattr(self, "keys", None) else False,
+                "update": dict(self.update),
                 "auto_chime": bool(self.cfg.get("auto_chime", True)),
                 "sound": dict(self.sound),
                 "status_open": self.status_open,

@@ -18,14 +18,16 @@ Thanks and have a great day!
 
 Built for working photographers in the field — airshows, ramps, sports, travel — who
 want their cards emptied and their photos in two places before they leave, without
-carrying a laptop. Developed and tested with a Nikon D850 and an Insta360 Ace Pro 2 on a
-Dell Latitude 7220 Rugged Extreme running Rocky Linux 9 and Red Hat Enterprise Linux 9.
+carrying a laptop. Developed and tested with a Nikon D850 and an Insta360 Ace Pro 2 on
+Dell Latitude 7220 and 7212 Rugged Extreme tablets and a Panasonic Toughpad FZ-M1, running
+Rocky Linux 9 and Red Hat Enterprise Linux 9.
 
-> **Built for the Dell Latitude 7220 Rugged Extreme** (12.5-inch screen, 1920 × 1080),
-> running Rocky Linux 9 or Red Hat Enterprise Linux 9. It may run on other tablets, but the
-> screens were drawn for the 7220's, and some features are made for it: its P1–P3 keys (a
-> one-touch backup and the tablet's status), its volume and brightness keys, and its two
-> hot-swap batteries. To use something else, fork it and adapt it.
+> **Built for three rugged tablets:** the **Dell Latitude 7220** and **7212 Rugged Extreme**
+> (1920 × 1080) and the 7-inch **Panasonic Toughpad FZ-M1** (1280 × 800), running Rocky
+> Linux 9 or Red Hat Enterprise Linux 9. Their buttons each have a job (a one-touch backup,
+> night mode, Home, brightness, the tablet's status: see the
+> [table in the user guide](docs/USER-GUIDE.md#the-tablets-own-keys)), and their hot-swap
+> batteries are watched. It may run on other tablets; to make one at home, fork it and adapt it.
 
 ## Why
 
@@ -60,9 +62,13 @@ strict in practice:
 - **Updates in Maintenance mode**: every 30, 60 or 90 days (or off), or sooner for a security fix, a
   terminal offers the system's updates and a newer DoubleTake, checked against its
   checksums, and installs them only if you say so.
-- **The tablet's own keys** (Dell Latitude 7220): P1 is a one-touch backup, P2 turns the red
-  theme on and off, P3 shows the tablet's status: the version, the photos on Copy 1 and
-  Copy 2, and each battery's charge and health.
+- **The tablet's own keys**: on the Dells, P1 is a one-touch backup, P2 turns the red theme
+  on and off, P3 shows the tablet's status: the version, the photos on Copy 1 and Copy 2,
+  and each battery's charge and health. On the 7212 and the FZ-M1 the Windows button goes
+  Home and the rotate button steps the brightness; the FZ-M1's A button is night mode
+  (after [one setting](docs/USER-GUIDE.md#the-tablets-own-keys) in its Setup Utility).
+- **Room for photos** in the bottom bar: how much more can be backed up to both copies,
+  with each copy's icon turning amber or red when it needs a look.
 - **Backup beeps:** one as a backup starts, two when it is done, three low ones when it
   needs a look, so a backup can be followed without looking.
 - **The tablet's status** at a glance (P3, or Settings, Device): photos on Copy 1 and
@@ -109,7 +115,9 @@ strict in practice:
   and Copy 2.
 - **Delete** shoots once they are on your editing workstation: choose one or several, then
   Delete, once. A shoot is kept for a day after it was copied, in case something went wrong.
-- **Photo viewer** with swipe, a filmstrip and exposure details. **Zoom to 50%, 75% or 100%**
+- **Photo viewer** with swipe, a filmstrip and exposure details, and **Rotate** for cameras
+  that do not record which way up they were held (only DoubleTake's pictures turn, never
+  the file). **Zoom to 50%, 75% or 100%**
   to check focus: double-tap a spot to zoom there, drag to look around.
 - **Sort** a shoot by capture time or by name, either way round (oldest first by default).
 - **Rename photos** from a pattern such as `{date}_{shoot}_{seq}` → `2026-10-11_ramp_sunset_0001.NEF`,
@@ -200,8 +208,8 @@ strict in practice:
 
   | System | |
   | --- | --- |
-  | Rocky Linux 9 | supported, tested on the Dell 7220 |
-  | Red Hat Enterprise Linux 9 | supported, tested on the Dell 7220 (and an earlier Dell 5175) |
+  | Rocky Linux 9 | supported, tested on the Dell 7220 and 7212 and the Panasonic FZ-M1 |
+  | Red Hat Enterprise Linux 9 | supported, tested on the Dell 7220 and 7212 (and an earlier Dell 5175) |
   | AlmaLinux 9 | expected to work, as a rebuild of Red Hat 9 |
   | Fedora | best effort: it runs, but your mileage may vary |
   | Anything else | fork it and adapt it |
@@ -221,6 +229,31 @@ strict in practice:
 - For the NAS: a network cable, the tablet's hotspot, or a trusted Wi-Fi network.
 
 ## Install
+
+Three ways: the **installer stick**, which makes the tablet a DoubleTake appliance (the
+easiest, and it erases the tablet); the **package**, onto a Rocky or Red Hat 9 you have
+installed yourself; or **setup.sh** from the source.
+
+### The installer stick (Rocky Linux 9 and DoubleTake in one)
+
+Download `doubletake-<version>-installer.iso` from the latest release (with
+`SHA256SUMS-iso` to check it: `sha256sum -c SHA256SUMS-iso`), write it to a USB stick of
+2 GB or more with [Fedora Media Writer](https://fedoraproject.org/workstation/download) or
+[balenaEtcher](https://etcher.balena.io/), and start the tablet from the stick (on the Dells,
+F12 at the Dell logo; or choose the stick in the firmware's boot menu).
+
+**It erases the tablet's whole internal drive.** A short text step asks only what it must:
+a network (a cable is used first; otherwise pick a Wi-Fi network and type its password),
+the tablet's user name (its serial number, or Dell service tag, is offered) and password,
+and the time zone when it cannot tell. It then shows the tablet, the user, the time zone,
+the name on the network (`dt-<serial>`) and the drive, and waits for you to type **ERASE**
+(or ZONE to change the time zone, or OFF to turn the tablet off). Rocky Linux's own
+packages are downloaded during the install (about 2 GB), so the network is needed; the
+install takes 15 to 30 minutes, and its screen lists each step as it happens. The tablet
+restarts by itself into DoubleTake's welcome pages, which ask the rest with a finger. The
+system part gets 25 GB, and the photos the rest of the drive.
+
+Updates come the same way as for the package: in Maintenance mode (Settings, Device).
 
 ### The package
 

@@ -185,16 +185,26 @@ def _open(path, long_side: int | None = None):
     return img, orientation
 
 
-def _turn(img, orientation):
+def _turn(img, orientation, turn: int = 0):
+    """Upright as the camera recorded it, then turned 'turn' degrees clockwise more (the
+    Rotate button, for cameras that record no orientation, like the Insta360)."""
     degrees = _ROTATE.get(orientation)
-    return img.rotate(degrees, expand=True) if degrees else img
+    img = img.rotate(degrees, expand=True) if degrees else img
+    turn = int(turn or 0) % 360
+    return img.rotate(360 - turn, expand=True) if turn else img
 
 
-def picture(path, size: str, cache_dir) -> Path | None:
-    """A thumbnail or screen-size picture, made once and then kept. None when there is no preview."""
+def _cache_name(size: str, turn: int = 0) -> str:
+    turn = int(turn or 0) % 360
+    return f"{size}.jpg" if not turn else f"{size}-{turn}.jpg"
+
+
+def picture(path, size: str, cache_dir, turn: int = 0) -> Path | None:
+    """A thumbnail or screen-size picture, made once and then kept. None when there is no preview.
+    Turned with the Rotate button: kept under its own name, so turning back is instant."""
     long_side = SIZES[size]
     cache = Path(cache_dir)
-    target = cache / f"{size}.jpg"
+    target = cache / _cache_name(size, turn)
     if target.is_file():
         return target
     if not have_pillow():
@@ -207,7 +217,7 @@ def picture(path, size: str, cache_dir) -> Path | None:
             if img is None:
                 return None
             img.draft("RGB", (long_side, long_side))  # decode at a fraction of full size: much faster
-            img = _turn(img.convert("RGB"), orientation)
+            img = _turn(img.convert("RGB"), orientation, turn)
             img.thumbnail((long_side, long_side))
             cache.mkdir(parents=True, exist_ok=True)
             tmp = target.with_name(f".{target.name}.{threading.get_ident()}.tmp")
@@ -218,7 +228,7 @@ def picture(path, size: str, cache_dir) -> Path | None:
             return None
 
 
-def full_size(path):
+def full_size(path, turn: int = 0):
     """The full-size preview as (width, height), or None."""
     if not have_pillow():
         return None
@@ -227,12 +237,13 @@ def full_size(path):
         if img is None:
             return None
         w, h = img.size
-        return (h, w) if orientation in (6, 8) else (w, h)
+        w, h = (h, w) if orientation in (6, 8) else (w, h)
+        return (h, w) if int(turn or 0) % 180 == 90 else (w, h)
     except Exception:
         return None
 
 
-def crop(path, cx: float, cy: float, width: int, height: int, scale: float = 1.0) -> bytes | None:
+def crop(path, cx: float, cy: float, width: int, height: int, scale: float = 1.0, turn: int = 0) -> bytes | None:
     """A piece of the full-size preview, centred on (cx, cy) given as fractions.
 
     'width' and 'height' are in the preview's own pixels; 'scale' is the zoom level
@@ -240,7 +251,7 @@ def crop(path, cx: float, cy: float, width: int, height: int, scale: float = 1.0
     """
     if not have_pillow():
         return None
-    key = str(path)
+    key = (str(path), int(turn or 0) % 360)
     with _working:
         with _full_lock:
             img = _full_cache.get(key)
@@ -249,7 +260,7 @@ def crop(path, cx: float, cy: float, width: int, height: int, scale: float = 1.0
                 img, orientation = _open(path)
                 if img is None:
                     return None
-                img = _turn(img.convert("RGB"), orientation)
+                img = _turn(img.convert("RGB"), orientation, turn)
             except Exception:
                 return None
             with _full_lock:
@@ -291,10 +302,11 @@ def forget(cache_dir) -> None:
     """Remove the kept pictures for one photo."""
     cache = Path(cache_dir)
     for size in SIZES:
-        try:
-            (cache / f"{size}.jpg").unlink()
-        except OSError:
-            pass
+        for turn in (0, 90, 180, 270):
+            try:
+                (cache / _cache_name(size, turn)).unlink()
+            except OSError:
+                pass
     try:
         cache.rmdir()
     except OSError:

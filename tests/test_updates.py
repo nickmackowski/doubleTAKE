@@ -7,6 +7,7 @@ import io
 import json
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -106,6 +107,59 @@ class DueTests(unittest.TestCase):
         self.assertEqual(opened, [])
 
 
+class LookTests(unittest.TestCase):
+    """The quiet look while DoubleTake runs, and what the screens are told."""
+
+    def setUp(self):
+        self.path = Path(tempfile.mkdtemp()) / "updates.json"
+        patch = mock.patch.object(updates, "state_path", return_value=self.path)
+        patch.start()
+        self.addCleanup(patch.stop)
+        self.asked = []
+
+    def release(self, version="99.0c"):
+        return lambda: self.asked.append("release") or {"version": version, "assets": {}}
+
+    def helper(self, count=12, security=2):
+        return lambda *a, **k: self.asked.append("system") or {"ok": True, "count": count, "security": security}
+
+    def test_a_newer_doubletake_once_a_day_and_the_system_once_a_week(self):
+        w = updates.look({}, now=1_000_000, release=self.release(), helper=self.helper())
+        self.assertEqual(w, {"available": True, "version": "99.0c", "system": 12, "security": 2, "later": False})
+        self.assertEqual(self.asked, ["release", "system"])
+        updates.look({}, now=1_000_000 + 3600, release=self.release(), helper=self.helper())
+        self.assertEqual(self.asked, ["release", "system"])  # nothing again within the hour
+        updates.look({}, now=1_000_000 + 86400, release=self.release(), helper=self.helper())
+        self.assertEqual(self.asked, ["release", "system", "release"])  # the next day: GitHub only
+        updates.look({}, now=1_000_000 + 7 * 86400, release=self.release(), helper=self.helper())
+        self.assertEqual(self.asked[-2:], ["release", "system"])
+
+    def test_this_version_or_older_is_not_an_update(self):
+        w = updates.look({}, now=1_000_000, release=self.release(updates.__version__), helper=self.helper(0, 0))
+        self.assertFalse(w["available"])
+        self.assertEqual(w["version"], "")
+
+    def test_switched_off_looks_for_nothing(self):
+        w = updates.look({"update_days": 0}, release=lambda: self.fail("no"), helper=lambda *a, **k: self.fail("no"))
+        self.assertFalse(w["available"])
+
+    def test_later_hides_the_pop_up_until_something_new(self):
+        updates.look({}, now=1_000_000, release=self.release(), helper=self.helper())
+        updates.later()
+        self.assertTrue(updates.waiting()["later"])
+        updates.look({}, now=1_000_000 + 7 * 86400, release=self.release(), helper=self.helper(14, 2))
+        self.assertFalse(updates.waiting()["later"])  # two more system updates: asked again
+
+    def test_maintenance_opens_the_terminal_when_the_screens_found_updates(self):
+        updates.mark_checked()
+        updates.look({}, now=time.time(), release=self.release(), helper=self.helper(0, 0))
+        opened = []
+        with mock.patch.object(updates.nas, "helper", lambda *a, **k: self.fail("no second look")), \
+                mock.patch.object(updates, "open_terminal", lambda cmd: opened.append(cmd) or True):
+            updates.auto({})
+        self.assertEqual(opened[0][-1], "update")
+
+
 class HelperUpdateTests(HelperBase):
     CHECK = ("\nkernel.x86_64          5.14.0-611.el9      rhel-9-baseos\n"
              "samba.x86_64           4.21.3-4.el9        rhel-9-baseos\n"
@@ -145,6 +199,27 @@ class WallpaperTests(unittest.TestCase):
         img = Image.open(out).convert("RGB")
         reds = sum(1 for x in range(0, 140) for y in range(960, 1080) if img.getpixel((x, y))[0] > 150)
         self.assertGreater(reds, 100)  # the logo is in the corner
+
+    def test_an_appliance_corner_shows_doubletake(self):
+        from unittest import mock
+
+        from PIL import Image, ImageDraw
+
+        drawn = []
+        real_text = ImageDraw.ImageDraw.text
+        marker = Path(tempfile.mkdtemp()) / "appliance"
+        marker.write_text("x")
+        with mock.patch.object(maintenance, "APPLIANCE", marker), \
+             mock.patch.object(ImageDraw.ImageDraw, "text", lambda self, xy, text, **kw: (drawn.append(text), real_text(self, xy, text, **kw))), \
+             mock.patch.object(maintenance, "system_logo", lambda release: self.fail("the system's logo was used")):
+            img = Image.new("RGB", (1920, 1080))
+            maintenance.draw_footer(img, "doubletake", release={"PRETTY_NAME": "Rocky Linux 9.8 (Blue Onyx)"})
+        self.assertIn("running on Rocky Linux 9.8 (Blue Onyx)", drawn)
+        self.assertTrue(maintenance.DOUBLETAKE_ICON.is_file())
+        # The boot screen's ring goes around the icon: its orange and its green are drawn.
+        colors = {c for _, c in img.crop((0, 900, 200, 1080)).getcolors(1 << 16)}
+        self.assertTrue(any(r > 230 and 100 < g < 140 and b < 30 for r, g, b in colors))
+        self.assertTrue(any(r < 70 and g > 190 and 100 < b < 140 for r, g, b in colors))
 
     def test_the_systems_logo_is_found_where_the_desktop_keeps_it(self):
         root = tempfile.mkdtemp()

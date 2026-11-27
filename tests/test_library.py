@@ -24,6 +24,18 @@ from doubletake.ingest import coverage, make_plan  # noqa: E402
 from doubletake.mirror import run_mirror  # noqa: E402
 from doubletake.sources.folder import FolderSource  # noqa: E402
 
+
+def setUpModule():
+    """These tests check the release's rule (a day's hold), in test builds too, where a shoot
+    may go at once."""
+    global _hold
+    _hold = retention.HOLD
+    retention.HOLD = retention.DAY
+
+
+def tearDownModule():
+    retention.HOLD = _hold
+
 try:
     from PIL import Image
 
@@ -109,23 +121,37 @@ class RetentionTests(Base):
         self.assertEqual(sorted(p.name for p in self.folder.iterdir()), ["my notes.txt"])
         self.assertFalse(self.on_card.exists())
         self.assertTrue((self.sd / "DoubleTake" / ".doubletake" / "card.json").exists())
-        # Its photos are still recognised as backed up, so never copied again if still on the
-        # camera, but they are on neither copy now: never called safe, and said why.
+        # 1.1.2c: a deleted shoot is forgotten. Its records are gone, and its photos, still on
+        # the camera, are simply new again: never called safe until they are copied again.
+        self.assertIsNone(self.ledger.shoot(self.shoot["id"]))
+        self.assertEqual(self.ledger.db.execute("SELECT COUNT(*) FROM files").fetchone()[0], 0)
         with FolderSource(str(self.card)) as source:
             plan = make_plan(source, self.ledger)
-        self.assertEqual((plan.already, len(plan.todo)), (4, 0))
+        self.assertEqual((plan.already, len(plan.todo)), (0, 4))
         cov = coverage(plan, self.ledger)
         self.assertFalse(cov.safe_to_format)
-        self.assertEqual((cov.cleared, cov.on_tablet, cov.on_second), (4, 0, 0))
+        self.assertEqual((cov.cleared, cov.on_tablet, cov.on_second), (0, 0, 0))
         # And nothing waits to go to the card.
         self.assertEqual(self.ledger.copy_totals(self.sdcard.card_id), (0, 0, 0))
 
     def test_card_that_was_out_is_cleaned_when_it_comes_back(self):
         retention.clear_shoot(self.ledger, self.cfg, self.shoot["id"], card=None, now=self.LATER)
         self.assertEqual(len(list(self.on_card.glob("*.NEF"))), 4)
+        # Out of sight, just enough is kept to clean the card when it comes back...
+        self.assertIsNotNone(self.ledger.shoot(self.shoot["id"]))
+        self.assertEqual(self.ledger.forget_cleared(), 0)  # (and opening the ledger keeps it)
         self.assertEqual(retention.card_cleanup(self.ledger, self.sdcard), 4)
         self.assertFalse(self.on_card.exists())
+        # ...and then the shoot is forgotten.
+        self.assertIsNone(self.ledger.shoot(self.shoot["id"]))
         self.assertEqual(retention.card_cleanup(self.ledger, self.sdcard), 0)
+
+    def test_shoots_deleted_by_an_earlier_version_are_forgotten(self):
+        # 1.0.x kept a deleted shoot's records; opening the ledger now forgets them.
+        self.ledger.db.execute("DELETE FROM copies")
+        self.ledger.set_cleared(self.shoot["id"], time.time())
+        self.assertEqual(self.ledger.forget_cleared(), 1)
+        self.assertIsNone(self.ledger.shoot(self.shoot["id"]))
 
     def test_imported_is_not_a_second_copy(self):
         self.cfg["second_copy"] = "off"
@@ -224,7 +250,7 @@ class LibraryServiceTests(StationBase):
         done = self.station.clear([shoot["id"]])
         self.assertEqual((done["error"], done["removed"]), ("", 3))
         view = self.station.library_view()
-        self.assertTrue(view["shoots"][0]["cleared"])
+        self.assertEqual(view["shoots"], [])  # forgotten, not listed as deleted
         self.assertEqual(view["totals"]["photos"], 0)
         self.assertIsNone(self.station.photo_file(first))
         self.assertFalse(cache.exists())

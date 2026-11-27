@@ -144,7 +144,29 @@ only on the tablet; the second copy catches up when a card is put in.
 - **The volume keys** reach the screens (Firefox has them while DoubleTake is up), which
   pass them to the engine, which changes the volume through PipeWire (`wpctl`, or `pactl`).
   No input device is read for them: on the 7220 they come from the built-in keyboard
-  device, which the helper never reads.
+  device.
+- **The 7212's Windows button** comes through that built-in keyboard device ("AT Translated
+  Set 2 keyboard"). It is the one exception: the helper opens it for the Windows key alone,
+  passes over every other key on it unread and unwritten (the volume keys aside), and never
+  opens any other keyboard. The 7212's volume buttons come from its 5 button array, which
+  the kiosk does not pass on to the screens: the helper reads them there, and the screens
+  then leave the volume keys alone, so a press never counts twice. A press brings the Home screen. (The code also turns the screen off when it is
+  held 2 seconds, but the 7212 reports a press and a release at once however long it is held,
+  so on the 7212 that never happens.) The
+  7212's rotate button comes from its Intel HID 5 button array and steps the brightness 25%
+  at a time, up to full and back down.
+- **The Panasonic FZ-M1's buttons** (product name FZM1-3) all come through its built-in
+  keyboard device, and the helper has a small table of what that model really sends
+  (`MODELS`). The Windows button is the Windows key: Home. The rotate button sends the
+  Windows key held round scancode 0x65, which Linux has no key for: the helper gives 0x65
+  the 7212's rotate key (as `setkeycodes` would, until the next restart) and drops the
+  Windows key wrapped round it, so it steps the brightness and does not go Home as well.
+  The A button reaches Linux only when set to Ctrl+Alt+Del in the tablet's Setup Utility (its
+  other setting talks to Panasonic's Windows software alone): left Ctrl, left Alt and Delete,
+  pressed and let go within a few milliseconds, read as P2 (night mode), from the built-in
+  keyboard only. So that the button never restarts the tablet, the install masks
+  `ctrl-alt-del.target` and sets `CtrlAltDelBurstAction=none`, and Start at power-on clears
+  the desktop's Log Out shortcut on that model (and puts it back when switched off).
 - **The brightness keys** come from the screen's own device (the Video Bus), which has no
   letter keys, so the helper's `keys` job reads them with the P keys. In DoubleTake only,
   the engine steps the brightness through the desktop's power service, or through the

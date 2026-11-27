@@ -109,6 +109,9 @@ class System:
         os.chmod(tmp, mode)
         os.replace(tmp, full)
 
+    def exists(self, p):
+        return os.path.exists(self.path(p))
+
     def read(self, p, default=""):
         try:
             with open(self.path(p), encoding="utf-8") as fh:
@@ -131,7 +134,12 @@ class System:
 # ----- configuration text ----------------------------------------------------------
 
 
-def samba_conf(library, owner, user):
+# On a tablet put in by the DoubleTake installer (an appliance) the NAS has its own name, as
+# computers list it: DoubleTake_NAS (15 characters at most). Elsewhere, the computer's own name.
+NAS_NAME = "DoubleTake_NAS"
+
+
+def samba_conf(library, owner, user, appliance=False):
     share = ""
     if user:
         share = f"""
@@ -148,7 +156,7 @@ def samba_conf(library, owner, user):
 """
     return f"""# Written by DoubleTake. Changes here are replaced by the app.
 [global]
-   mdns name = netbios
+{"   netbios name = " + NAS_NAME + chr(10) if appliance else ""}   mdns name = netbios
    server min protocol = SMB2_10
    fruit:model = MacSamba
    load printers = no
@@ -322,7 +330,7 @@ def install(sysm, library, env):
 
     # Samba: our own file, pulled in from the main one, and only our share.
     tidy_samba(sysm)
-    sysm.write("/etc/samba/doubletake.conf", samba_conf(library, owner.pw_name, state["user"]))
+    sysm.write("/etc/samba/doubletake.conf", samba_conf(library, owner.pw_name, state["user"], sysm.exists("/etc/doubletake/appliance")))
     done.append("samba")
 
     # The firewall: the share and SFTP only on trusted networks and the hotspot.
@@ -367,11 +375,26 @@ def install(sysm, library, env):
     if state.get("nas") or state.get("sftp"):
         sysm.run(["systemctl", "restart", "doubletake-nas-status.service"])  # the new version of it
     status_service(sysm, state)
+    if model_keys(sysm).get("ctrl_alt_del"):
+        done.append(quiet_ctrl_alt_del(sysm))
     return {"ok": True, "done": done}
 
 
+CAD_CONF = "/etc/systemd/system.conf.d/50-doubletake-ctrl-alt-del.conf"
+
+
+def quiet_ctrl_alt_del(sysm):
+    """A tablet whose button sends Ctrl+Alt+Del (MODELS): the system must not restart for it,
+    at a text screen (ctrl-alt-del.target) or pressed 7 times in 2 seconds (the burst)."""
+    sysm.run(["systemctl", "mask", "ctrl-alt-del.target"])
+    sysm.write(CAD_CONF, "# DoubleTake: this tablet's A button sends Ctrl+Alt+Del (night mode).\n"
+                         "[Manager]\nCtrlAltDelBurstAction=none\n")
+    sysm.run(["systemctl", "daemon-reexec"])
+    return "ctrl-alt-del"
+
+
 def _apply_user(sysm, state, user):
-    sysm.write("/etc/samba/doubletake.conf", samba_conf(state["library"], state["owner"], user))
+    sysm.write("/etc/samba/doubletake.conf", samba_conf(state["library"], state["owner"], user, sysm.exists("/etc/doubletake/appliance")))
     sysm.write("/etc/ssh/doubletake_sftp_config", sshd_conf(user), mode=0o600)
     sysm.run(["smbcontrol", "smbd", "reload-config"])
     code, out, _ = sysm.run(["systemctl", "is-active", "doubletake-sftp.service"])
@@ -1791,8 +1814,14 @@ def updates_check(sysm):
 
 INPUT_SYS = "/sys/class/input"
 KEY_CODES = {148: "p1", 149: "p2", 202: "p3",  # KEY_PROG1, KEY_PROG2, KEY_PROG3
-             224: "brightness_down", 225: "brightness_up"}  # the screen's own keys (Video Bus)
+             224: "brightness_down", 225: "brightness_up",  # the screen's own keys (Video Bus)
+             116: "power",  # KEY_POWER: the power button (its own small device, or the firmware's)
+             114: "volume_down",  # KEY_VOLUMEDOWN, KEY_VOLUMEUP: on the 7212 from its 5 button
+             115: "volume_up",    # array, which the kiosk does not pass on to the screens
+             125: "windows",  # KEY_LEFTMETA: the Windows button beside the screen (7212's 5 button array)
+             561: "rotate"}  # KEY_ROTATE_LOCK_TOGGLE: the 7212's rotate button
 REPEATS = {"brightness_down", "brightness_up"}  # held down, these go on stepping
+RELEASES = {"windows"}  # let go: "windows_up" (a short press and a hold do different things)
 KEY_A = 30
 # Every letter key (Q to P, A to L, Z to M): a device with any of them is a keyboard, never read.
 LETTER_KEYS = tuple(range(16, 26)) + tuple(range(30, 39)) + tuple(range(44, 51))
@@ -1828,14 +1857,128 @@ def key_devices(sysm):
     return found
 
 
-def key_presses(data):
-    """The P keys pressed in a run of input events (bytes): ['p1', ...]."""
+# The tablet's own built-in keyboard (the PS/2 controller's): on the 7212 the Windows button
+# beside the screen comes through it. From it only these keys are taken; everything else on
+# it (typing) is passed over and never written anywhere.
+BUILT_IN_KEYBOARD = "AT Translated Set 2 keyboard"
+KEYBOARD_KEYS = {"windows", "windows_up", "volume_down", "volume_up", "rotate", "p2"}
+
+# Per tablet model (its product name): what its buttons really send. The Panasonic FZ-M1 Mk3
+# (FZM1-3), measured on Nick's (2026-11-23):
+# - Windows button: the Windows key, pressed and let go together (2 ms apart). Read as it is:
+#   Home.
+# - rotate button: the Windows key, held down round scancode 0x65 (about 0.2 s), a scancode
+#   Linux has no key for ("Unknown key pressed ... Use 'setkeycodes 65 <keycode>'"). 0x65 is
+#   given KEY_ROTATE_LOCK_TOGGLE (the 7212's rotate key: the brightness), and the Windows key
+#   round it is not read, so it does not go Home as well.
+# - The Windows button also makes the Panasonic driver write "Unknown hotkey event: 0x005e"
+#   (pressed) and 0x005f (let go) in the kernel's log. Read as the A button at first, it put
+#   night mode on the Windows button (Nick, 2026-11-25): not read. MODELS["kmsg"] stays for
+#   a button that only the kernel's log tells of, should one turn up.
+# - A button: set to "Ctrl+Alt+Del" in its Setup Utility (Main, Tablet Button Configuration;
+#   its "Application1" reaches Panasonic's Windows software only). It sends left Alt, left
+#   Ctrl and Delete, all pressed and let go within 7 ms: read as p2, night mode, as P2. The
+#   system's own Ctrl+Alt+Del is switched off on it (install: the restart; poweron: the
+#   desktop's Log Out box).
+# Given when the keys are watched, as setkeycodes would; until the tablet restarts, nothing kept.
+MODELS = {"FZM1-3": {"scancodes": ((0x65, 561),), "wrapped": True, "ctrl_alt_del": "p2"}}
+CTRL_KEYS, ALT_KEYS, KEY_DELETE = {29, 97}, {56, 100}, 111
+WRAP_WAIT = 0.4  # seconds: a Windows press, waited on this long at most for its release
+EVIOCSKEYCODE = 0x40084504  # _IOW('E', 0x04, unsigned int[2])
+HOTKEY_LINE = re.compile(rb"Unknown hotkey event: 0x([0-9a-fA-F]+)")
+
+
+def model_keys(sysm) -> dict:
+    return MODELS.get(sysm.read("/sys/class/dmi/id/product_name").strip(), {})
+
+
+def give_keycodes(sysm, paths) -> set:
+    """Give this model's scancodes their keys on these keyboards. The keys given: {'rotate'}."""
+    import fcntl
+
+    pairs = model_keys(sysm).get("scancodes", ())
+    given = set()
+    for path in paths:
+        try:
+            with open(sysm.path(path), "rb", buffering=0) as fh:
+                for scancode, keycode in pairs:
+                    fcntl.ioctl(fh, EVIOCSKEYCODE, struct.pack("II", scancode, keycode))
+                    given.add(KEY_CODES[keycode])
+        except OSError:
+            continue  # not a real input device, or it refused: the button stays unread
+    return given
+
+
+def kmsg_presses(record: bytes, mapping: dict) -> list:
+    """A line of the kernel's log: the key it means for this model, if any."""
+    found = HOTKEY_LINE.search(record)
+    if not found:
+        return []
+    key = mapping.get("%04x" % int(found.group(1), 16))
+    return [key] if key else []
+
+
+def keyboard_devices(sysm):
+    """The built-in keyboard, when it has a Windows key: /dev/input/eventN paths."""
+    found = []
+    try:
+        names = sorted(os.listdir(sysm.path(INPUT_SYS)))
+    except OSError:
+        return found
+    for name in names:
+        if not re.fullmatch(r"event[0-9]+", name):
+            continue
+        if sysm.read(f"{INPUT_SYS}/{name}/device/name").strip() != BUILT_IN_KEYBOARD:
+            continue
+        if _has_key(sysm.read(f"{INPUT_SYS}/{name}/device/capabilities/key"), 125):
+            found.append(f"/dev/input/{name}")
+    return found
+
+
+def _events(data):
+    return [EVENT.unpack_from(data, offset) for offset in range(0, len(data) - EVENT.size + 1, EVENT.size)]
+
+
+def key_presses(data, wrapped=False, ctrl_alt_del=None, held=None):
+    """The P keys pressed in a run of input events (bytes): ['p1', ...]. With wrapped (MODELS),
+    a Windows press and release with the rotate key between them is the rotate button alone.
+    With ctrl_alt_del (a key's name), Delete pressed while a Ctrl and an Alt are held is that
+    key; `held` (a set kept between runs) carries Ctrl and Alt from one run to the next."""
     out = []
-    for offset in range(0, len(data) - EVENT.size + 1, EVENT.size):
-        _, _, kind, code, value = EVENT.unpack_from(data, offset)
-        if kind == EV_KEY and code in KEY_CODES and (value == 1 or (value == 2 and KEY_CODES[code] in REPEATS)):
+    events = _events(data)
+    skip = set()
+    held = held if held is not None else set()
+    for i, (sec, usec, kind, code, value) in enumerate(events):
+        if ctrl_alt_del and kind == EV_KEY and code in CTRL_KEYS | ALT_KEYS | {KEY_DELETE}:
+            if code == KEY_DELETE:
+                if value == 1 and held & CTRL_KEYS and held & ALT_KEYS:
+                    out.append(ctrl_alt_del)
+            elif value == 1:
+                held.add(code)
+            elif value == 0:
+                held.discard(code)
+            continue
+        if i in skip or kind != EV_KEY or code not in KEY_CODES:
+            continue
+        if wrapped and code == 125 and value == 1:
+            j = next((j for j in range(i + 1, len(events)) if events[j][2] == EV_KEY and events[j][3] == 125), None)
+            if j is not None and any(events[k][2] == EV_KEY and events[k][3] == 561 and events[k][4] == 1
+                                     for k in range(i + 1, j)):
+                skip.add(j)  # the rotate button's own Windows key: not Home
+                continue
+        if value == 1 or (value == 2 and KEY_CODES[code] in REPEATS):
             out.append(KEY_CODES[code])
+        elif value == 0 and KEY_CODES[code] in RELEASES:
+            out.append(KEY_CODES[code] + "_up")
     return out
+
+
+def _open_windows_press(data) -> bool:
+    """The last Windows event in these is a press: its release may be a moment behind."""
+    for _, _, kind, code, value in reversed(_events(data)):
+        if kind == EV_KEY and code == 125:
+            return value == 1
+    return False
 
 
 def watch_keys(sysm, out=None):
@@ -1844,20 +1987,73 @@ def watch_keys(sysm, out=None):
 
     out = out or sys.stdout
     devices = key_devices(sysm)
-    if not devices:
+    keyboards = [d for d in keyboard_devices(sysm) if d not in devices]
+    if not devices and not keyboards:
         return {"ok": False, "error": "no P keys or brightness keys on this tablet"}
-    files = [open(sysm.path(d), "rb", buffering=0) for d in devices]
+    # First, which keys are read, so the screens know (the power button above all: DoubleTake
+    # holds it from the system only when its presses really come through here).
+    have = set()
+    for d in devices:
+        bitmap = sysm.read(f"{INPUT_SYS}/{d.rsplit('/', 1)[-1]}/device/capabilities/key")
+        have.update(name for code, name in KEY_CODES.items() if _has_key(bitmap, code))
+    model = model_keys(sysm)
+    wrapped = bool(model.get("wrapped"))
+    ctrl_alt_del = model.get("ctrl_alt_del")
+    if keyboards:
+        have.update({"windows", "volume_down", "volume_up"})
+        have.update(give_keycodes(sysm, keyboards))
+        if ctrl_alt_del:
+            have.add(ctrl_alt_del)
+    kmsg = None
+    if model.get("kmsg"):  # a button only the kernel's log tells of: read from now on
+        try:
+            kmsg = open(sysm.path("/dev/kmsg"), "rb", buffering=0)
+            os.lseek(kmsg.fileno(), 0, os.SEEK_END)
+            os.set_blocking(kmsg.fileno(), False)
+            have.update(model["kmsg"].values())
+        except OSError:
+            kmsg = None
+    out.write(json.dumps({"have": sorted(have)}) + "\n")
+    out.flush()
+    files = [open(sysm.path(d), "rb", buffering=0) for d in devices + keyboards]
+    only = {files[i]: KEYBOARD_KEYS for i in range(len(devices), len(files))}
+    held = {fh: set() for fh in files}  # Ctrl and Alt down, per device (ctrl_alt_del)
     try:
         while True:
-            ready, _, _ = select.select(files, [], [], 60)
+            ready, _, _ = select.select(files + ([kmsg] if kmsg else []), [], [], 60)
             for fh in ready:
-                for key in key_presses(fh.read(EVENT.size * 32)):
+                if fh is kmsg:
+                    while True:
+                        try:
+                            record = kmsg.read(8192)
+                        except BlockingIOError:
+                            break
+                        except OSError:
+                            break  # the log moved on under us (EPIPE): read on at the next turn
+                        if not record:
+                            break
+                        for key in kmsg_presses(record, model["kmsg"]):
+                            out.write(json.dumps({"key": key}) + "\n")
+                            out.flush()
+                    continue
+                data = fh.read(EVENT.size * 32)
+                if wrapped:  # the rotate button holds the Windows key: wait for its release
+                    deadline = time.time() + WRAP_WAIT
+                    while _open_windows_press(data) and deadline > time.time():
+                        more, _, _ = select.select([fh], [], [], max(0.0, deadline - time.time()))
+                        if not more:
+                            break
+                        data += fh.read(EVENT.size * 32)
+                cad = ctrl_alt_del if fh in only else None  # the built-in keyboard only
+                for key in key_presses(data, wrapped, cad, held[fh]):
+                    if fh in only and key not in only[fh]:
+                        continue
                     out.write(json.dumps({"key": key}) + "\n")
                     out.flush()
     except BrokenPipeError:
         return {"ok": True}
     finally:
-        for fh in files:
+        for fh in files + ([kmsg] if kmsg else []):
             fh.close()
 
 
@@ -1943,7 +2139,74 @@ def adopt(sysm, library, env):
             done.append("boot screen")
     except (Refused, OSError, subprocess.SubprocessError) as exc:
         done.append(f"boot screen: {exc}")
+    try:
+        if power_balanced(sysm):
+            done.append("power: balanced")
+    except (OSError, subprocess.SubprocessError) as exc:
+        done.append(f"power: {exc}")
+    try:
+        tablet_details(sysm)
+        done.append("tablet details")
+    except OSError as exc:
+        done.append(f"tablet details: {exc}")
     return {"ok": True, "user": owner.pw_name, "done": done}
+
+
+PPD_BASE = "/etc/tuned/ppd_base_profile"
+TABLET_FILE = "/etc/doubletake/tablet.json"
+_NO_SERIAL = re.compile(r"(?i)^(|to be filled.*|default string|system serial number|none|n/a|not applicable|"
+                        r"not specified|unknown|0+|123456789\d*)$")
+
+
+def tablet_details(sysm):
+    """The tablet's serial number and memory details, which only root may read, written once at
+    setup (and each upgrade) for About to show: nothing asks for them later, and nothing goes in."""
+    serial = sysm.read("/sys/class/dmi/id/product_serial").strip()
+    found = {"serial": "" if _NO_SERIAL.match(serial) else serial[:40],
+             "vendor": sysm.read("/sys/class/dmi/id/sys_vendor").strip()[:40]}
+    if sysm.have("dmidecode"):
+        try:
+            code, out, _ = sysm.run(["dmidecode", "-t", "17"], timeout=30)
+        except (OSError, subprocess.SubprocessError):
+            code, out = 1, ""
+        if code == 0:
+            for block in out.split("\n\n"):
+                fields = {}
+                for line in block.splitlines():
+                    key, sep, value = line.strip().partition(":")
+                    if sep:
+                        fields[key.strip()] = value.strip()
+                if not fields.get("Size", "").split(" ")[0].isdigit():
+                    continue  # an empty slot
+                speed = fields.get("Configured Memory Speed") or fields.get("Speed") or ""
+                maker = fields.get("Manufacturer", "")
+                found["memory_type"] = fields.get("Type", "")[:20] if fields.get("Type") not in ("Unknown", "Other") else ""
+                found["memory_speed"] = speed[:20] if speed[:1].isdigit() else ""
+                found["memory_maker"] = "" if _NO_SERIAL.match(maker) or maker.lower().startswith("not ") else maker[:40]
+                break
+    sysm.write(TABLET_FILE, json.dumps(found) + "\n", mode=0o644)
+    return found
+
+
+def power_balanced(sysm):
+    """The power mode on Balanced, once, at the first setup: a later choice in Settings is
+    kept. RHEL and Rocky 9.8 run tuned with tuned-ppd, which keeps the mode GNOME shows in
+    its own file; other systems run power-profiles-daemon."""
+    state = sysm.state()
+    if state.get("power_set"):
+        return False
+    code, _, _ = sysm.run(["rpm", "-q", "tuned-ppd"], timeout=30)
+    if code == 0:
+        sysm.write(PPD_BASE, "balanced\n")
+        sysm.run(["systemctl", "try-restart", "tuned-ppd.service"], timeout=60)
+    elif sysm.have("powerprofilesctl"):
+        sysm.run(["powerprofilesctl", "set", "balanced"], timeout=30)
+    else:
+        return False
+    state = sysm.state()
+    state["power_set"] = True
+    sysm.save_state(state)
+    return True
 
 
 def migrate_old_names(sysm):

@@ -22,8 +22,13 @@
   <button id="back" class="back" type="button" aria-label="Back" hidden>
     <svg viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7"/></svg>
   </button>
+  <!-- Rotate (viewer and editor): 90 degrees clockwise a tap, kept in DoubleTake's records only -->
+  <button id="rotate" class="back rotate" type="button" aria-label="Rotate" title="Rotate" hidden>
+    <svg viewBox="0 0 24 24"><path d="M20 12a8 8 0 1 1-2.34-5.66"/><path d="M20 4v5h-5"/></svg>
+  </button>
   <svg id="bar-icon" class="bar-icon" viewBox="0 0 24 24"><path d="M3 8h4l2-3h6l2 3h4v11H3z"/><circle cx="12" cy="13" r="3.5"/></svg>
   <div id="bar-title" class="title">DoubleTake &#8226; Field Station</div>
+  <button id="bar-update" class="chip solid bar-update" type="button" hidden>Update available</button>
   <div id="bar-chip" class="chip" hidden></div>
   <div id="bar-folder" class="mono bar-folder" hidden></div>
   <div id="bar-count" class="title" hidden></div>
@@ -159,15 +164,12 @@
   </div>
 
   <div class="foot">
-    <div class="card foot-box">
-      <div class="foot-copy">
-        <svg class="ico-m" viewBox="0 0 24 24"><rect x="4" y="3" width="16" height="18" rx="2"/><circle cx="12" cy="10.5" r="4"/><circle cx="12" cy="10.5" r=".6"/><path d="M14.5 13l2.5 4M7 18h.01"/></svg>
-        <div><div class="label">Copy 1</div><div id="foot-tablet" class="foot-val"></div></div>
-      </div>
-      <div id="foot-copy2" class="foot-copy">
-        <svg class="ico-m copy2-sd" viewBox="0 0 24 24"><path d="M8 3h9a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V7zM9 3v4M12 3v4M15 3v4"/></svg>
-        <svg class="ico-m copy2-usb" viewBox="0 0 24 24" hidden><path d="M8 9h8v12H8zM9.5 3h5v6h-5zM11 5h.01M13 5h.01"/></svg><svg class="ico-m copy2-drive" viewBox="0 0 24 24" hidden><rect x="3" y="4" width="14" height="16" rx="2"/><circle cx="10" cy="11" r="3.5"/><circle cx="10" cy="11" r=".5"/><path d="M17 12h2.5a1.5 1.5 0 0 1 1.5 1.5V19M19.5 19h3"/></svg>
-        <div><div class="label">Copy 2</div><div id="foot-card" class="foot-val"></div></div>
+    <div id="foot-box" class="card foot-box" role="button" title="Tablet status">
+      <!-- Room for photos: both copies' icons, each with its own colour, and one number, the
+           smaller room of the two (what can still be backed up twice). A tap opens Tablet status. -->
+      <div id="foot-room" class="foot-copy foot-room">
+        <span class="foot-icons"><span id="foot-ico1" class="foot-ico"><svg class="ico-m" viewBox="0 0 24 24"><rect x="4" y="3" width="16" height="18" rx="2"/><circle cx="12" cy="10.5" r="4"/><circle cx="12" cy="10.5" r=".6"/><path d="M14.5 13l2.5 4M7 18h.01"/></svg></span><span id="foot-ico2" class="foot-ico"><svg class="ico-m copy2-sd" viewBox="0 0 24 24"><path d="M8 3h9a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V7zM9 3v4M12 3v4M15 3v4"/></svg><svg class="ico-m copy2-usb" viewBox="0 0 24 24" hidden><path d="M8 9h8v12H8zM9.5 3h5v6h-5zM11 5h.01M13 5h.01"/></svg><svg class="ico-m copy2-drive" viewBox="0 0 24 24" hidden><rect x="3" y="4" width="14" height="16" rx="2"/><circle cx="10" cy="11" r="3.5"/><circle cx="10" cy="11" r=".5"/><path d="M17 12h2.5a1.5 1.5 0 0 1 1.5 1.5V19M19.5 19h3"/></svg></span></span>
+        <div><div class="label">Room for photos<span id="foot-warn" class="foot-warn"></span></div><div id="foot-room-val" class="foot-val"></div></div>
       </div>
       <div class="grow"></div>
       <div id="foot-problem" class="small muted"></div>
@@ -407,6 +409,9 @@
 <section id="view-viewer" class="view">
   <div class="viewer">
     <div class="stage-col">
+      <div class="stage-row">
+      <!-- Previous and Next beside the photo, where the thumbs rest holding the tablet. -->
+      <button id="vw-prev" class="btn side" type="button" aria-label="Previous"><svg viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7"/></svg></button>
       <div id="stage" class="stage">
         <img id="vw-fit" class="fit" alt="" draggable="false">
         <img id="vw-full" class="full" alt="" draggable="false" hidden>
@@ -414,9 +419,9 @@
         <div id="vw-mode" class="tag mode" hidden>100%</div>
         <div id="vw-info" class="vw-info"><span class="vi-who"><span id="vw-name"></span><span id="vw-date"></span><span id="vw-time"></span></span><span class="vi-sep">&#8226;</span><span id="vw-exif" class="vi-how"></span></div>
       </div>
-      <div class="tools">
-        <button id="vw-prev" class="btn sq" type="button" aria-label="Previous"><svg viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7"/></svg></button>
-        <button id="vw-next" class="btn sq" type="button" aria-label="Next"><svg viewBox="0 0 24 24"><path d="M9 5l7 7-7 7"/></svg></button>
+      <button id="vw-next" class="btn side" type="button" aria-label="Next"><svg viewBox="0 0 24 24"><path d="M9 5l7 7-7 7"/></svg></button>
+      </div>
+      <div class="tools vw-tools">
         <div class="seg">
           <button id="vw-fitbtn" type="button" class="on">Fit</button>
           <button id="vw-50" type="button" data-zoom="50">50%</button>
@@ -425,6 +430,9 @@
         </div>
         <div class="grow"></div>
         <div class="taken"><div class="label">Taken</div><div id="vw-taken" class="v"></div></div>
+        <button id="vw-export" class="btn" type="button">
+          <svg class="ico-s" viewBox="0 0 24 24"><path d="M4 14v5h16v-5"/><path d="M12 15V4"/><path d="M7.5 8.5L12 4l4.5 4.5"/></svg><span id="vw-export-t">Export</span>
+        </button>
         <button id="vw-edit" class="btn" type="button">
           <svg class="ico-s" viewBox="0 0 24 24"><path d="M4 20h4L19 9l-4-4L4 16z"/><path d="M13 7l4 4"/></svg>Edit
         </button>
@@ -436,6 +444,11 @@
     <div class="strip">
       <div id="vw-frames" class="label"></div>
       <div id="vw-strip" class="thumbs"></div>
+      <!-- Page the strip ten frames at a time, without changing the photo shown. -->
+      <div class="strip-page">
+        <button id="vw-up" class="btn" type="button" aria-label="Earlier frames"><svg viewBox="0 0 24 24"><path d="M5 15l7-7 7 7"/></svg></button>
+        <button id="vw-down" class="btn" type="button" aria-label="Later frames"><svg viewBox="0 0 24 24"><path d="M5 9l7 7 7-7"/></svg></button>
+      </div>
     </div>
   </div>
 </section>
@@ -704,12 +717,22 @@
           <button type="button" data-v="2">2 min</button>
           <button type="button" data-v="5">5 min</button>
           <button type="button" data-v="10">10 min</button>
+          <button type="button" data-v="30">30 min</button>
           <button type="button" data-v="0">Never</button>
         </div>
       </div>
       <div class="setrow look-row">
         <div class="what"><div class="t">On battery, sleep after</div><div id="set-sleep-text" class="body"></div></div>
         <div class="seg small" id="set-sleep">
+          <button type="button" data-v="15">15 min</button>
+          <button type="button" data-v="30">30 min</button>
+          <button type="button" data-v="60">1 hour</button>
+          <button type="button" data-v="0">Never</button>
+        </div>
+      </div>
+      <div class="setrow look-row">
+        <div class="what"><div class="t">On the charger, sleep after</div><div id="set-sleep-ac-text" class="body"></div></div>
+        <div class="seg small" id="set-sleep-ac">
           <button type="button" data-v="15">15 min</button>
           <button type="button" data-v="30">30 min</button>
           <button type="button" data-v="60">1 hour</button>
@@ -944,6 +967,21 @@
           <button id="set-link-add" class="btn" type="button">Add a link</button>
         </div>
       </div>
+      <div class="card">
+        <div class="setrow">
+          <div class="what"><div class="t">Watermark</div><div class="body">On the photos a phone saves, from corner to corner. Only the phone's copies: your photos and exports stay as they are.</div></div>
+          <button id="set-wm" class="toggle" type="button"><span></span></button>
+        </div>
+        <div class="setrow">
+          <div class="what"><div class="t">First line</div><div id="set-wm-1" class="body"></div></div>
+          <button id="set-wm-1-edit" class="btn" type="button">Change</button>
+        </div>
+        <div class="setrow">
+          <div class="what"><div class="t">Second line</div><div id="set-wm-2" class="body"></div></div>
+          <button id="set-wm-2-edit" class="btn" type="button">Change</button>
+        </div>
+        <div class="wm-box"><img id="set-wm-img" alt="The watermark, as a phone would get it"></div>
+      </div>
       <div class="setrow plain">
         <div class="body grow">The phone page shows these. Your name and website also go into every exported JPEG, as its Artist and Copyright. Kept on this tablet only.</div>
         <button id="set-phone-preview" class="btn" type="button">Preview the phone page</button>
@@ -1007,6 +1045,21 @@
         <div class="setrow">
           <div class="what"><div class="t">Tablet status</div><div class="body">Version, photos on Copy 1 and Copy 2, and the batteries. P3 opens it too, on tablets with that key.</div></div>
           <button id="set-status" class="btn" type="button">Show</button>
+        </div>
+        <div class="setrow" id="set-pmode-row" hidden>
+          <div class="what"><div class="t">Power mode</div><div class="body">Balanced suits a game. Power Saver for a long day on battery; Performance on the charger.</div></div>
+          <div class="seg small" id="set-pmode">
+            <button type="button" data-v="power-saver">Power Saver</button>
+            <button type="button" data-v="balanced">Balanced</button>
+            <button type="button" data-v="performance">Performance</button>
+          </div>
+        </div>
+        <div class="setrow">
+          <div class="what"><div class="t">Power button</div><div id="set-pbutton-text" class="body"></div></div>
+          <div class="seg small" id="set-pbutton">
+            <button type="button" data-v="sleep">Sleep</button>
+            <button type="button" data-v="off">Turn off</button>
+          </div>
         </div>
         <div class="setrow" id="set-flicker-row" hidden>
           <div class="what"><div class="t">Screen flicker fix</div><div id="set-flicker-text" class="body"></div></div>
@@ -1085,6 +1138,15 @@
     <div class="lead">You backed up in the last 12 hours. Add to one of those imports, or start a new folder.</div>
     <div id="where-list" class="where-list"></div>
     <div class="confirm-actions"><button id="where-cancel" class="btn big-btn" type="button">Cancel</button></div>
+  </div>
+</div>
+
+<!-- The power button pressed during a backup: done once the backup is. -->
+<div id="power-wait" class="veil" hidden>
+  <div class="card modal">
+    <div class="h1">Backup in progress</div>
+    <div id="power-wait-text" class="lead"></div>
+    <div class="confirm-actions"><button id="power-wait-cancel" class="btn big-btn" type="button">Cancel</button></div>
   </div>
 </div>
 

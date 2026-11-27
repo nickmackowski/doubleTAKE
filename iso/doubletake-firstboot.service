@@ -1,0 +1,15 @@
+[Unit]
+Description=DoubleTake: set the tablet up on its first start
+ConditionPathExists=/var/lib/doubletake/firstboot
+After=network-online.target systemd-user-sessions.service firewalld.service power-profiles-daemon.service tuned-ppd.service
+Wants=network-online.target
+Before=display-manager.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/libexec/doubletake-firstboot
+TimeoutStartSec=30min
+RemainAfterExit=no
+
+[Install]
+WantedBy=multi-user.target

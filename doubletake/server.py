@@ -82,8 +82,9 @@ def make_handler(station: Station, on_quit):
             if found is None:
                 return self._json({"error": "not found"}, 404)
             path, cache = found
+            turn = editor.turn_of(station.data_dir, file_id)
             if kind in ("thumb.jpg", "screen.jpg"):
-                made = photos.picture(path, kind[:-4], cache)
+                made = photos.picture(path, kind[:-4], cache, turn)
                 if made is None:
                     return self._json({"error": "no preview"}, 404)
                 return self._file(made, "max-age=86400")
@@ -106,7 +107,7 @@ def make_handler(station: Station, on_quit):
                 scale = scale if scale in (0.5, 0.75) else 1.0
                 body = photos.crop(path, min(1.0, max(0.0, number("x", 0.5))), min(1.0, max(0.0, number("y", 0.5))),
                                    int(min(4000 / scale, number("w", 1600))), int(min(3000 / scale, number("h", 1000))),
-                                   scale)
+                                   scale, turn)
                 if body is None:
                     return self._json({"error": "no preview"}, 404)
                 return self._jpeg(body)
@@ -150,7 +151,12 @@ def make_handler(station: Station, on_quit):
                 body = share.logo_bytes()
                 return self._send_bytes(body, "image/png") if body else self._json({"error": "not found"}, 404)
             if len(parts) == 3 and parts[0] in ("t", "f"):
-                return self._export("/export/" + "/".join(parts[1:]), {"t": ["thumb" if parts[0] == "t" else "full"]})
+                if not share.lines():
+                    return self._export("/export/" + "/".join(parts[1:]),
+                                        {"t": ["thumb" if parts[0] == "t" else "full"]})
+                found = share._find(parts[1], parts[2])
+                body = None if found is None else (share.thumb(found) if parts[0] == "t" else share.full(found))
+                return self._jpeg(body) if body is not None else self._json({"error": "not found"}, 404)
             return self._json({"error": "not found"}, 404)
 
         def _local(self) -> bool:
@@ -210,6 +216,8 @@ def make_handler(station: Station, on_quit):
                 if body is None:
                     return self._json({"error": "not found"}, 404)
                 return self._send_bytes(body, "image/png")
+            if url.path == "/api/settings/watermark.jpg":
+                return self._jpeg(station.watermark_preview())
             if url.path.startswith("/phone-preview/"):
                 return self._phone_preview(url.path, query)
             if url.path.startswith("/export/"):
@@ -295,6 +303,16 @@ def make_handler(station: Station, on_quit):
                     error = station.edit_save(int(data.get("id") or 0), data.get("params"))
                 except (TypeError, ValueError):
                     error = "Not a photo."
+            elif path == "/api/photo/turn":
+                try:
+                    done = station.turn_photo(int(data.get("id") or 0))
+                except (TypeError, ValueError):
+                    done = {"error": "Not a photo."}
+                return self._json(dict(done, ok=not done.get("error")))
+            elif path == "/api/power/cancel":
+                station.cancel_power()
+            elif path == "/api/update/later":
+                station.update_later()
             elif path == "/api/export":
                 ids = [int(x) for x in data.get("ids") or [] if str(x).isdigit()]
                 error = station.start_export(ids, str(data.get("size") or ""), str(data.get("quality") or ""))
@@ -446,9 +464,24 @@ user_pref("startup.homepage_welcome_url.additional", "");
 user_pref("datareporting.policy.dataSubmissionEnabled", false);
 user_pref("toolkit.telemetry.reportingpolicy.firstRun", false);
 user_pref("browser.sessionstore.resume_from_crash", false);
+user_pref("browser.sessionstore.max_resumed_crashes", 0);
+user_pref("browser.startup.page", 0);
+// No "Open previous tabs?" bar: a kiosk has no tabs to bring back.
+user_pref("browser.startup.couldRestoreSession.count", -1);
 user_pref("browser.tabs.warnOnClose", false);
 user_pref("browser.translations.automaticallyPopup", false);
 """
+
+
+def forget_session(profile: Path) -> None:
+    """Firefox's saved tabs from the last time, which it would offer to bring back after the
+    tablet was switched off: the screens always start fresh, so they are removed."""
+    for name in ("sessionstore.jsonlz4", "sessionstore.js", "sessionCheckpoints.json"):
+        try:
+            (profile / name).unlink()
+        except OSError:
+            pass
+    shutil.rmtree(profile / "sessionstore-backups", ignore_errors=True)
 
 
 def open_screens(url: str, kiosk: bool):
@@ -462,6 +495,7 @@ def open_screens(url: str, kiosk: bool):
             profile = Path(os.path.expanduser("~/.local/share/doubletake/firefox-profile"))
             profile.mkdir(parents=True, exist_ok=True)
             (profile / "user.js").write_text(_KIOSK_PREFS, encoding="utf-8")
+            forget_session(profile)
             # A dark window from the first moment, before the screens have drawn.
             env = dict(os.environ, GTK_THEME="Adwaita:dark")
             return subprocess.Popen([firefox, "--kiosk", "--no-remote", "--profile", str(profile), url],

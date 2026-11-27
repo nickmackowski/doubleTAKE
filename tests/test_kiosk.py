@@ -102,6 +102,16 @@ class LeaveTests(StationBase):
         super().setUp()
         self.station.STEP_SECONDS = self.station.READ_SECONDS = 0  # no pauses to read, in tests
 
+    def camera_read(self):
+        """Started, the station reads the (test) camera first; leaving waits for no read, so
+        let it finish (on a slow computer it can still be reading when the test goes on)."""
+        deadline = time.time() + 10
+        while time.time() < deadline:
+            thread = self.station._camera_thread
+            if thread is not None and not thread.is_alive() and self.station.camera.get("state") != "absent":
+                return
+            time.sleep(0.05)
+
     def test_never_during_a_backup_from_the_camera(self):
         self.station._camera_thread = mock.Mock(is_alive=lambda: True)
         with mock.patch.object(kiosk, "power", lambda action: self.fail("must not run")):
@@ -110,6 +120,7 @@ class LeaveTests(StationBase):
     def test_the_second_copy_is_stopped_first_and_a_failure_carries_on(self):
         self.station.start()
         self.addCleanup(self.station.shutdown)
+        self.camera_read()
         order = []
         real = self.station.shutdown
 
@@ -129,6 +140,7 @@ class LeaveTests(StationBase):
 
     def test_each_step_is_listed_with_ok_for_the_switching_screen(self):
         self.station.start()
+        self.camera_read()
         with mock.patch.object(kiosk, "power", lambda action: ""):
             self.assertEqual(self.station.leave("restart"), "")
         steps = self.station.state()["leaving"]["steps"]

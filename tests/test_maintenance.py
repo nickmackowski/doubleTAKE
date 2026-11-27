@@ -58,8 +58,22 @@ class MaintenanceTests(unittest.TestCase):
             p.start()
             self.addCleanup(p.stop)
         real = maintenance.make_wallpaper
-        maintenance.make_wallpaper = lambda host="": real(maintenance.WALLPAPER, (960, 540), host)
+        self.sizes = []
+        maintenance.make_wallpaper = lambda size=(1920, 1080), host="": (
+            self.sizes.append(size) or real(maintenance.WALLPAPER, (960, 540), host))
         self.addCleanup(setattr, maintenance, "make_wallpaper", real)
+        self.screen = None
+        p = mock.patch.object(maintenance, "screen_size", lambda: self.screen)
+        p.start(); self.addCleanup(p.stop)
+
+    def test_the_wallpaper_is_drawn_at_the_screens_size(self):
+        # The FZ-M1 (1280 x 800, 16:10): drawn 16:9 its corner was cut off.
+        self.screen = (1280, 800)
+        maintenance.dress_desktop({})
+        self.assertEqual(self.sizes[-1], (1280, 800))
+        self.screen = None  # nothing says: as before
+        maintenance.dress_desktop({})
+        self.assertEqual(self.sizes[-1], (1920, 1080))
 
     def test_one_visit(self):
         self.assertEqual(maintenance.start(), "")

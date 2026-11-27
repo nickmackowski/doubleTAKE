@@ -525,6 +525,7 @@ document.addEventListener("keydown", async (e) => {
   const key = MEDIA_KEYS[e.key];
   if (!key || stopped) return;
   e.preventDefault();
+  if (key.startsWith("volume") && S.keys_volume) return;  // the engine reads them on this tablet
   showLevel(await post("/api/media", { key: key }));
 }, true);
 // The brightness keys come through the engine (the helper reads them), so the level comes in the state.
@@ -536,7 +537,8 @@ function renderLevel() {
 function showLevel(reply) {
   if (!reply || reply.error || reply.level === undefined) return;
   const muted = reply.kind === "volume" && reply.muted;
-  setText("osd-label", reply.kind === "volume" ? (muted ? "Muted" : "Volume") : "Brightness");
+  const way = reply.up === undefined ? "" : reply.up ? " \u25B2" : " \u25BC";  // the rotate button's direction
+  setText("osd-label", (reply.kind === "volume" ? (muted ? "Muted" : "Volume") : "Brightness") + way);
   $("osd-fill").style.width = (muted ? 0 : Math.max(0, Math.min(100, reply.level))) + "%";
   setText("osd-value", muted ? "" : reply.level + "%");
   show("osd", true);
@@ -628,16 +630,41 @@ function render() {
   if (v === "library") pollLibrary();
   if (v === "settings") renderSecondSettings();
   renderExportJob();
+  vwExportJob();
+  renderPowerWait();
   renderUsbJob();
   renderPhone();
   renderModal();
 }
 
+// The Windows button (7212): a short press brings the Home screen, from anywhere.
+let homeId = null;
+function homeButton() {
+  const id = S.home_id || 0;
+  const pressed = homeId !== null && id !== homeId;
+  homeId = id;  // first: go() renders, and the render comes back here
+  if (!pressed) return;
+  if (typeof kb !== "undefined" && kb) closeKeyboard(false);
+  if (!$("confirm").hidden) $("confirm-no").click();
+  go("home");
+}
+
 function renderBar(v) {
+  homeButton();
+  // A newer DoubleTake or system updates, found on a trusted network: a tag to tap, and the
+  // pop-up once on the Home screen. Never while a backup runs.
+  const u = S.update || {};
+  const copyingNow = !!(S.backup && S.backup.running);
+  show("bar-update", !!u.available && !copyingNow && v !== "copy");
+  if (u.available && !u.later && !copyingNow && v === "home" && !updateAsked && $("confirm").hidden) {
+    updateAsked = true;
+    updatePopup();
+  }
   show("back", !!BACK[v]);
+  show("rotate", (v === "viewer" || (v === "editor" && !!ed)) && !!shoot && !!shoot.files.length);
   show("home", !!BACK[v] && BACK[v] !== "home");  // straight home, when that saves a tap
   show("bar-icon", v === "home");
-  const titles = { home: "DoubleTake \u2022 " + (S.edition === "tron" ? "Two Replicas of Negatives" : "Field Station"), library: "Shoot library", settings: "Settings", exports: "Exports" };
+  const titles = { home: "DoubleTake \u2022 " + (S.edition === "tron" ? "Trusted Replication of Original Negatives" : "Field Station"), library: "Shoot library", settings: "Settings", exports: "Exports" };
   const inShoot = (v === "grid" || v === "viewer" || v === "editor") && shoot;
   setText("bar-title", inShoot ? leaf(shoot.folder) : titles[v] || "Camera backup");
   $("bar-title").classList.toggle("mono", !!inShoot);
@@ -885,7 +912,7 @@ function renderHome() {
     row.addEventListener("click", (event) => { event.stopPropagation(); openShoot(shoot.id); });
     const pic = document.createElement("div");
     pic.className = "pic";
-    if (shoot.cover) pic.append(picture(shoot.cover));
+    if (shoot.cover) pic.append(picture(shoot.cover, shoot.cover_turn));
     row.append(pic);
     // The full folder name, and the number of photos under it. A longer name from before
     // 1.0.2c is shortened in the middle, so the number that tells imports apart still shows.
@@ -908,16 +935,56 @@ function renderHome() {
   });
 
   renderNasTile();
-  setText("foot-tablet", space(S.tablet.free, S.tablet.total));
-  // Copy 2: the microSD card, or the USB drive when the settings say so; greyed while it is out.
-  const usb = S.card.kind === "usb";
-  const in2 = S.card.state === "ready";
-  setText("foot-card", in2 ? space(S.card.free, S.card.total) : usb ? "No drive" : "No card");
-
-  $("foot-copy2").classList.toggle("off", !in2);
+  renderRoom();
   renderVersion($("foot-version"), S.version);
   setText("foot-problem", S.problem);
 }
+
+// ----- the bottom bar: room for photos -----
+
+// One number: the room left for photos on BOTH copies, which is the smaller of the two (Copy 1
+// also holds the system, so it fills first). With no Copy 2, Copy 1's room, "on the tablet only".
+// Each copy keeps its own icon and colour: amber when Copy 2 is missing or held up, red when it
+// is full or stopped, and Copy 1 likewise when the tablet's own drive runs short.
+const ROOM_LOW = 20e9, ROOM_OUT = 2e9;  // the tablet's drive: amber under 20 GB, red under 2 GB
+function roomText(v) {
+  const x = Math.max(0, v || 0);
+  if (x >= 1e12) return (Math.floor(x / 1e10) / 100).toFixed(2).replace(/0$/, "") + " TB";
+  if (x >= 10e9) return Math.floor(x / 1e9) + " GB";
+  return (Math.floor(x / 1e8) / 10).toFixed(1) + " GB";
+}
+function roomInfo(t, k, m) {
+  const word = k.kind === "usb" ? "drive" : "card";
+  const in2 = k.state === "ready";
+  const one = (t.free || 0) < ROOM_OUT ? "out" : (t.free || 0) < ROOM_LOW ? "low" : "";
+  let two = "", warn = "";
+  if (!in2) {
+    two = "low";
+    warn = {off: "Copy 2 switched off", new: "New " + word + " for Copy 2", declined: "Copy 2 " + word + " not in use",
+            several: "More than one drive for Copy 2", readonly: "Copy 2 " + word + " is read-only"}[k.state]
+           || "No " + word + " for Copy 2";
+  } else if (m.state === "error") {
+    two = "out";
+    warn = /full/i.test(m.message || "") ? "Copy 2 " + word + " full" : "Copy 2 stopped";
+  } else if ((k.waiting || 0) > 0 && (m.paused_by_user || m.state === "paused")) {
+    two = "low"; warn = "Copy 2 paused";
+  } else if ((k.free || 0) < ROOM_OUT) {
+    two = "out"; warn = "Copy 2 " + word + " full";
+  }
+  const room = in2 ? Math.min(t.free || 0, k.free || 0) : (t.free || 0);
+  const value = roomText(room) + (in2 ? " for both copies" : ", on the tablet only");
+  if (!warn && one) warn = one === "out" ? "Tablet drive full" : "Tablet drive nearly full";
+  return { one, two, warn, value, room };
+}
+function renderRoom() {
+  const r = roomInfo(S.tablet || {}, S.card || {}, S.mirror || {});
+  setText("foot-room-val", r.value);
+  setText("foot-warn", r.warn ? " · " + r.warn : "");
+  $("foot-warn").className = "foot-warn " + (r.one === "out" || r.two === "out" ? "out" : "low");
+  $("foot-ico1").className = "foot-ico " + r.one;
+  $("foot-ico2").className = "foot-ico " + r.two;
+}
+$("foot-box").addEventListener("click", () => { S.status_open = true; statusShown = false; renderStatus(); post("/api/status/open"); });
 
 // ----- the NAS tile -----
 
@@ -1104,6 +1171,19 @@ function renderCopy() {
   $("btn-stop").disabled = stopping;
 }
 
+// A title kept on one line (app.css): too long for its room, it is drawn smaller, by at most
+// a quarter. Only while it is on screen, where its room can be measured.
+function oneLine(el, smallest = 0.75) {
+  el.style.fontSize = "";
+  if (!el.clientWidth) return;
+  const base = parseFloat(getComputedStyle(el).fontSize);
+  let size = base;
+  while (el.scrollWidth > el.clientWidth + 1 && size > base * smallest) {
+    size -= base * 0.03;
+    el.style.fontSize = size + "px";
+  }
+}
+
 function renderDone() {
   const b = S.backup;
   const banner = $("dn-banner");
@@ -1111,6 +1191,9 @@ function renderDone() {
   let title = "Backup complete";
   let sub = n(b.verified) + plural(b.verified, " photo", " photos") + " verified on the tablet.";
   let side = "You can unplug the camera. The second copy carries on by itself.";
+  const k = S.card;
+  const m = S.mirror;
+  const s = secondInfo();
   if (b.error) {
     kind = "stop"; title = "Backup did not run"; sub = b.error; side = "";
   } else if (b.nothing) {
@@ -1124,6 +1207,10 @@ function renderDone() {
     sub = n(b.failed) + plural(b.failed, " file", " files") + " failed the checks and " +
           plural(b.failed, "was", "were") + " not kept.";
     side = "Failed files are tried again on the next backup.";
+  } else if (k.waiting > 0 && !s.running && (!s.ok || m.state === "error" || m.state === "paused" || m.paused_by_user)) {
+    // Copy 2 cannot finish by itself: never say it carries on.
+    kind = "warn";
+    side = copy2Stuck(k, m, s);
   }
   banner.className = "banner" + (kind === "ok" ? "" : " " + kind);
   show("dn-icon-ok", kind === "ok");
@@ -1131,6 +1218,7 @@ function renderDone() {
   setText("dn-title", title);
   setText("dn-sub", sub);
   setText("dn-side", side);
+  oneLine($("dn-title"));
 
   setText("dn-files", n(b.verified));
   setText("dn-files-of", " / " + n(b.total_files));
@@ -1141,9 +1229,6 @@ function renderDone() {
   setText("dn-tablet", space(S.tablet.free, S.tablet.total));
   setText("dn-tablet-state", b.verified ? n(b.verified) + " verified" : "");
 
-  const k = S.card;
-  const m = S.mirror;
-  const s = secondInfo();
   const state = $("dn-card-state");
   setText("dn-card-name", s.ok ? "Copy 2" : "No second copy");
   show("dn-card-bar", s.running);
@@ -1172,6 +1257,22 @@ function renderDone() {
   const failures = (b.failures || []).slice(0, 2).map((x) => x.name + ": " + x.note).join("   ");
   setText("dn-fail-list", failures);
   show("btn-again", !!b.interrupted && S.camera.connected);
+}
+
+// What to do when Copy 2 cannot finish by itself, for the end of a backup.
+function copy2Stuck(k, m, s) {
+  const word = k.kind === "usb" ? "drive" : "card";
+  const photos = n(k.waiting) + plural(k.waiting, " photo", " photos");
+  const keep = " Keep the camera's cards until then.";
+  if (s.ok && m.state === "error" && /full/i.test(m.message || ""))
+    return "Copy 2's " + word + " is full. Put in a " + word + " with room and the " + photos + " catch up by themselves." + keep;
+  if (s.ok && m.state === "error")
+    return "Copy 2 stopped. Tap Try again on the Home screen, and the " + photos + " catch up." + keep;
+  if (s.ok)
+    return "Copy 2 is paused. Resume it on the Home screen, and the " + photos + " catch up." + keep;
+  if (k.state === "off")
+    return "The second copy is switched off in the settings. " + photos + " have only Copy 1." + keep.replace(" until then", "");
+  return "Copy 2 has no " + word + ". Put one in and the " + photos + " catch up by themselves." + keep;
 }
 
 // A new card or drive: DoubleTake erases it and keeps it for itself, after three checks.
@@ -1282,7 +1383,7 @@ function openWhere(choices) {
     b.className = "btn where-pick";
     const t = document.createElement("div"); t.className = "mono t"; t.textContent = c.folder;
     const sub = document.createElement("div"); sub.className = "body";
-    sub.textContent = clockTime(c.time) + (c.cameras ? " \u2022 " + c.cameras : "") + " \u2022 " + n(c.photos) + plural(c.photos, " photo", " photos");
+    sub.textContent = clockTime(c.time) + " \u2022 " + n(c.photos) + plural(c.photos, "\u00a0photo", "\u00a0photos");
     b.append(t, sub);
     b.addEventListener("click", () => startBackup(c.folder));
     return b;
@@ -1295,6 +1396,7 @@ function openWhere(choices) {
   fresh.append(t, sub);
   fresh.addEventListener("click", () => startBackup(""));
   buttons.push(fresh);
+  $("where-list").style.setProperty("--cols", Math.min(3, buttons.length));
   $("where-list").replaceChildren(...buttons);
   show("where", true);
 }
@@ -1305,6 +1407,39 @@ function clockTime(seconds) {
 
 $("where-cancel").addEventListener("click", () => show("where", false));
 $("back").addEventListener("click", () => go(BACK[shown] || "home"));
+
+// Rotate: the photo shown, 90 degrees clockwise more. For cameras that do not record which
+// way up they were held (the Insta360). Only DoubleTake's pictures turn; the file never changes.
+let turning = false;
+$("rotate").addEventListener("click", async () => {
+  if (turning || !shoot) return;
+  const inEditor = shown === "editor" && ed;
+  const file = inEditor ? ed.file : shoot.files[vw.index];
+  if (!file) return;
+  turning = true;
+  try {
+    if (inEditor && ed.saveTimer) {  // edits not yet kept: keep them first, so they turn too
+      clearTimeout(ed.saveTimer);
+      ed.saveTimer = 0;
+      await post("/api/edit", { id: file.id, params: Object.assign({}, ed.params) });
+    }
+    const reply = await post("/api/photo/turn", { id: file.id });
+    if (!reply || reply.error) return;
+    file.turn = reply.turn;
+    const at = shoot.files.indexOf(file);
+    const cell = $("grid").children[at];
+    if (cell) cell.replaceWith(thumbFor(file, at, openPhoto));
+    if (inEditor) {
+      ed.params = Object.assign({}, reply.params);
+      edRefreshControls();
+      edRender();
+    } else {
+      showPhoto();
+    }
+  } finally {
+    turning = false;
+  }
+});
 $("home").addEventListener("click", () => go("home"));
 $("btn-scan").addEventListener("click", () => post("/api/camera/scan"));
 $("btn-rescan").addEventListener("click", () => post("/api/camera/scan"));
@@ -1367,7 +1502,8 @@ $("dev-exit").addEventListener("click", async () => {
 let lib = null;        // the library as last loaded
 let libAt = 0;         // when it was loaded
 let shoot = null;      // the shoot being browsed, with its photos
-let vw = { index: 0, info: null, full: false, crop: null, fx: 0.5, fy: 0.5, x: 0, y: 0, token: 0, scale: 1, tapTimer: 0 };
+let vw = { index: 0, info: null, full: false, crop: null, fx: 0.5, fy: 0.5, x: 0, y: 0, token: 0, scale: 1, tapTimer: 0,
+  stripStart: null, exporting: null };
 let prefs = null;      // the settings as last loaded
 let section = "display";
 
@@ -1385,6 +1521,25 @@ function tell(title, text) {
   $("confirm-yes").classList.remove("danger");
   ask(title, text, "OK").then(() => { show("confirm-no", true); $("confirm-yes").classList.add("danger"); });
 }
+
+// The update pop-up: once a session on the Home screen, or when the tag is tapped.
+let updateAsked = false;
+async function updatePopup() {
+  const u = S.update || {};
+  if (!u.available) return;
+  const parts = [];
+  if (u.version) parts.push("DoubleTake " + u.version);
+  if (u.system) parts.push(n(u.system) + plural(u.system, " update", " updates") + " for the tablet's system" +
+    (u.security ? " (" + n(u.security) + " of them security " + plural(u.security, "fix", "fixes") + ")" : ""));
+  const text = parts.join(", and ") + ". Updates install in Maintenance mode, never while photos are being copied, " +
+    "and the tablet may restart afterwards.";
+  setText("confirm-no", "Later");
+  const yes = await ask(parts.length > 1 || u.system > 1 ? "Updates are ready" : "An update is ready", text, "Go to Maintenance");
+  setText("confirm-no", "Cancel");
+  if (yes) leave("desktop", "Maintenance mode", "", "", false);
+  else post("/api/update/later");
+}
+$("bar-update").addEventListener("click", updatePopup);
 
 function ask(title, text, yes) {
   return new Promise((resolve) => {
@@ -1442,7 +1597,7 @@ function renderLibrary() {
     name.className = "lib-name";
     const pic = document.createElement("div");
     pic.className = "lib-pic";
-    if (s.cover) pic.append(picture(s.cover));
+    if (s.cover) pic.append(picture(s.cover, s.cover_turn));
     const text = document.createElement("div");
     text.className = "lib-text";
     const title = document.createElement("div");
@@ -1530,13 +1685,17 @@ $("btn-delete").addEventListener("click", async () => {
 
 // ----- photos of one shoot -----
 
-function picture(fileId) {
+// A photo's picture address: "?r=90" when it was turned with Rotate, so the browser never
+// shows a picture it kept from before the turn.
+function turned(turn) { return turn ? "?r=" + turn : ""; }
+
+function picture(fileId, turn) {
   const img = document.createElement("img");
   img.loading = "lazy";
   img.decoding = "async";
   img.alt = "";
   img.draggable = false;
-  img.src = "/photo/" + fileId + "/thumb.jpg";
+  img.src = "/photo/" + fileId + "/thumb.jpg" + turned(turn);
   img.addEventListener("error", () => img.remove());
   return img;
 }
@@ -1554,7 +1713,7 @@ function thumbFor(file, index, onClick) {
   img.loading = "lazy";
   img.decoding = "async";
   img.alt = "";
-  img.src = "/photo/" + file.id + "/thumb.jpg";
+  img.src = "/photo/" + file.id + "/thumb.jpg" + turned(file.turn);
   img.addEventListener("error", () => { img.remove(); });
   const label = document.createElement("div");
   label.className = "num";
@@ -1653,7 +1812,7 @@ function showPhoto() {
                                             : "No preview stored in this file.");
     show("vw-note", true);
   };
-  fit.src = "/photo/" + file.id + "/screen.jpg";
+  fit.src = "/photo/" + file.id + "/screen.jpg" + turned(file.turn);
   const taken = new Date(file.taken * 1000);
   setText("vw-taken", taken.toTimeString().slice(0, 8));
   vw.info = null;
@@ -1671,19 +1830,94 @@ function showPhoto() {
     placeInfo();
   }).catch(() => {});
 
-  // The strip of nearby frames, ten at a time.
-  const start = Math.max(0, Math.min(vw.index - 4, shoot.files.length - 10));
+  // The strip of nearby frames, ten at a time, around the photo shown.
+  vw.stripStart = null;
+  renderStrip();
+  renderVwExport();
+  // Fetch the next picture early, so moving on is instant.
+  const next = shoot.files[vw.index + 1];
+  if (next) new Image().src = "/photo/" + next.id + "/screen.jpg" + turned(next.turn);
+  render();
+}
+
+// The strip: ten frames around the photo shown, or, after Up or Down, the ten paged to
+// (the photo shown stays). Showing a photo brings it back around that photo.
+function renderStrip() {
+  if (!shoot) return;
+  const total = shoot.files.length;
+  const around = Math.max(0, Math.min(vw.index - 4, total - 10));
+  const start = vw.stripStart === null ? around : vw.stripStart;
   const near = shoot.files.slice(start, start + 10);
-  setText("vw-frames", "Frames " + n(start + 1) + " to " + n(start + near.length));
+  setText("vw-frames", "Frames " + n(start + 1) + " to " + n(start + near.length) + " of " + n(total));
   $("vw-strip").replaceChildren(...near.map((f, i) => {
     const box = thumbFor(f, start + i, (k) => { vw.index = k; showPhoto(); });
     box.classList.toggle("on", start + i === vw.index);
     return box;
   }));
-  // Fetch the next picture early, so moving on is instant.
-  const next = shoot.files[vw.index + 1];
-  if (next) new Image().src = "/photo/" + next.id + "/screen.jpg";
-  render();
+  $("vw-up").disabled = start <= 0;
+  $("vw-down").disabled = start + 10 >= total;
+}
+
+function pageStrip(by) {
+  if (!shoot) return false;
+  const total = shoot.files.length;
+  const now = vw.stripStart === null ? Math.max(0, Math.min(vw.index - 4, total - 10)) : vw.stripStart;
+  const next = Math.max(0, Math.min(now + by * 10, Math.max(0, total - 10)));
+  if (next === now) return false;
+  vw.stripStart = next;
+  renderStrip();
+  return true;
+}
+
+// Up and Down: one page per press, and held down they keep going.
+for (const [id, by] of [["vw-up", -1], ["vw-down", 1]]) {
+  let hold = 0, repeat = 0;
+  const stop = () => { clearTimeout(hold); clearInterval(repeat); hold = repeat = 0; };
+  $(id).addEventListener("pointerdown", (event) => {
+    event.preventDefault();
+    stop();
+    pageStrip(by);
+    hold = setTimeout(() => { repeat = setInterval(() => { if (!pageStrip(by)) stop(); }, 180); }, 450);
+  });
+  for (const type of ["pointerup", "pointerleave", "pointercancel"]) $(id).addEventListener(type, stop);
+  $(id).addEventListener("click", (event) => event.preventDefault());
+}
+
+// Export, from the viewer: one tap saves the photo as it is (with any saved edits) to
+// Exports, at the size and quality last chosen, ready for Send to phone.
+function renderVwExport() {
+  const file = shoot && shoot.files[vw.index];
+  if (!file) return;
+  const busy = vw.exporting === file.id;
+  setText("vw-export-t", busy ? "Exporting" : (file.exported ? "Exported" : "Export"));
+  $("vw-export").classList.toggle("done", !!file.exported && !busy);
+  $("vw-export").disabled = !!vw.exporting;
+}
+
+async function vwExport() {
+  const file = shoot && shoot.files[vw.index];
+  if (!file || vw.exporting) return;
+  vw.exporting = file.id;
+  vw.exportRun = ((S.export_job || {}).run || 0) + 1;  // this export's number
+  renderVwExport();
+  const reply = await post("/api/export", { ids: [file.id], size: xm.size, quality: xm.quality });
+  if (reply.error) {
+    vw.exporting = null;
+    renderVwExport();
+    await ask("Not exported", reply.error, "OK");
+  }
+}
+
+function vwExportJob() {
+  if (!vw.exporting) return;
+  const j = S.export_job || {};
+  if (j.busy || (j.run || 0) < vw.exportRun) return;  // still going, or not started yet
+  const id = vw.exporting;
+  vw.exporting = null;
+  if (shoot && !j.error) for (const f of shoot.files) if (f.id === id) f.exported = true;
+  renderVwExport();
+  renderStrip();
+  if (j.error) ask("Not exported", j.error, "OK");
 }
 
 function step(by) {
@@ -1749,7 +1983,7 @@ async function enterFull(fx, fy) {
   setText("vw-mode", label + "  loading");
   show("vw-mode", true);
   const img = new Image();
-  img.src = "/photo/" + file.id + "/crop.jpg?x=" + fx.toFixed(4) + "&y=" + fy.toFixed(4) + "&w=" + w + "&h=" + h + "&s=" + s;
+  img.src = "/photo/" + file.id + "/crop.jpg?x=" + fx.toFixed(4) + "&y=" + fy.toFixed(4) + "&w=" + w + "&h=" + h + "&s=" + s + "&r=" + (file.turn || 0);
   try { await img.decode(); } catch (err) { setText("vw-mode", label + " not available"); return; }
   if (token !== vw.token || !vw.full) return;
   const shownImg = $("vw-full");
@@ -1791,14 +2025,25 @@ function fitFraction(clientX, clientY) {
 function placeFit() {
   const img = $("vw-fit");
   if (!img.naturalWidth || img.hidden) return;
-  const box = stageBox();
-  if (!box.width || !box.height) return;
+  const row = $("stage").parentElement, col = row.parentElement;
   const rem = parseFloat(getComputedStyle(document.documentElement).fontSize) || 16;
-  const frame = 1.25 * rem, room = 1.25 * rem;  // the frame, and the space around it
-  const scale = Math.min((box.width - 2 * (frame + room)) / img.naturalWidth,
-                         (box.height - 2 * (frame + room)) / img.naturalHeight);
+  // The photo as big as fits with the same thin band of black above and below it, and room
+  // for an arrow either side. The side columns then take what is left, so the photo area is
+  // exactly the framed photo: arrows centred in the black beside it, the tools (Fit on the
+  // left, All on the right) lined up with its edges.
+  const frame = 1.25 * rem, band = 1 * rem, gap = .5 * rem, arrow = 3.75 * rem;
+  const rowW = row.clientWidth - 2 * gap, rowH = row.clientHeight;
+  if (!rowW || !rowH) return;
+  const scale = Math.min((rowW - 2 * (arrow + gap) - 2 * frame) / img.naturalWidth,
+                         (rowH - 2 * band - 2 * frame) / img.naturalHeight);
   if (!(scale > 0)) return;
   const w = Math.round(img.naturalWidth * scale), h = Math.round(img.naturalHeight * scale);
+  col.style.setProperty("--side", Math.max(arrow, (rowW - (w + 2 * frame)) / 2 - gap) + "px");
+  // Portrait: a narrow photo, too narrow for the tools; they keep their usual width.
+  col.style.removeProperty("--tools-side");
+  const tools = col.querySelector(".vw-tools");
+  if (tools && tools.scrollWidth > tools.clientWidth + 1) col.style.setProperty("--tools-side", arrow + "px");
+  const box = stageBox();
   img.style.padding = frame + "px";
   img.style.width = w + "px";
   img.style.height = h + "px";
@@ -1992,7 +2237,7 @@ function edRender() {
   if (!ed) return;
   const token = ++ed.token;
   const p = encodeURIComponent(JSON.stringify(ed.params));
-  const url = "/photo/" + ed.file.id + "/edit.jpg?crop=" + (ed.cropping ? "0" : "1") + "&p=" + p;
+  const url = "/photo/" + ed.file.id + "/edit.jpg?crop=" + (ed.cropping ? "0" : "1") + "&r=" + (ed.file.turn || 0) + "&p=" + p;
   clearTimeout(ed.renderTimer);
   ed.renderTimer = setTimeout(async () => {
     show("ed-tag", true);
@@ -2104,9 +2349,60 @@ $("ed-frame").addEventListener("pointerup", edDragEnd);
 $("ed-frame").addEventListener("pointercancel", edDragEnd);
 $("ed-frame").addEventListener("dragstart", (event) => event.preventDefault());
 
+// A slider row takes the finger anywhere on it (its name, its value, its track), not only
+// on the thin track: on the FZ-M1's 7-inch screen a flat finger lands beside the track.
+// Sideways (mostly): the value follows the finger from where it was, without jumping. Up
+// and down: the panel scrolls (the browser's own, touch-action pan-y). A tap on or near the
+// track (not on the name, where a double-tap puts it back): the value goes there. The track
+// itself takes no touches (app.css), so the browser's own slider never fights this.
+const ED_SLIDE_START = 6;  // px sideways before a touch counts as moving the slider
+function edSlider(input) {
+  const row = input.closest(".ed-row");
+  const low = () => Number(input.min), high = () => Number(input.max);
+  let drag = null;
+  function put(value) {
+    const step = Number(input.step) || 1;
+    const places = (String(input.step).split(".")[1] || "").length;
+    const stepped = low() + Math.round((value - low()) / step) * step;
+    const v = Math.min(high(), Math.max(low(), Number(stepped.toFixed(places))));
+    if (Number(input.value) === v) return;
+    input.value = v;
+    input.dispatchEvent(new Event("input"));
+  }
+  row.addEventListener("pointerdown", (event) => {
+    if (input.disabled || (event.pointerType === "mouse" && event.button !== 0)) return;
+    drag = { id: event.pointerId, x: event.clientX, y: event.clientY, from: Number(input.value),
+             width: input.getBoundingClientRect().width || 1, sliding: false,
+             onName: Boolean(event.target.closest && event.target.closest(".ed-top")) };
+  });
+  row.addEventListener("pointermove", (event) => {
+    if (!drag || event.pointerId !== drag.id) return;
+    const dx = event.clientX - drag.x, dy = event.clientY - drag.y;
+    if (!drag.sliding) {
+      if (Math.abs(dx) < ED_SLIDE_START || Math.abs(dx) < Math.abs(dy)) return;
+      drag.sliding = true;
+      try { row.setPointerCapture(event.pointerId); } catch (err) { /* the finger already left */ }
+    }
+    event.preventDefault();
+    put(drag.from + dx / drag.width * (high() - low()));
+  });
+  row.addEventListener("pointerup", (event) => {
+    if (!drag || event.pointerId !== drag.id) return;
+    const tap = !drag.sliding && !drag.onName  // the name: a double-tap there puts it back
+      && Math.hypot(event.clientX - drag.x, event.clientY - drag.y) < ED_SLIDE_START;
+    drag = null;
+    if (!tap) return;
+    const r = input.getBoundingClientRect();
+    if (event.clientX < r.left || event.clientX > r.right) return;
+    put(low() + (event.clientX - r.left) / r.width * (high() - low()));
+  });
+  row.addEventListener("pointercancel", () => { drag = null; });
+}
+
 for (const key of ED_KEYS) {
   const input = $("ed-" + key);
   input.addEventListener("input", () => { ed.params[key] = Number(input.value); edChanged(); });
+  edSlider(input);
   // Double-tap a slider's name to put it back.
   input.closest(".ed-row").querySelector(".ed-top").addEventListener("dblclick", () => {
     ed.params[key] = ed.info.neutral[key];
@@ -2135,7 +2431,7 @@ $("ed-reset").addEventListener("click", async () => {
 // Hold to compare with the photo as it came.
 function edBefore(on) {
   if (!ed) return;
-  if (on) { $("ed-img").src = "/photo/" + ed.file.id + "/screen.jpg"; show("ed-crop", false); setText("ed-tag", "Original"); show("ed-tag", true); }
+  if (on) { $("ed-img").src = "/photo/" + ed.file.id + "/screen.jpg" + turned(ed.file.turn); show("ed-crop", false); setText("ed-tag", "Original"); show("ed-tag", true); }
   else { show("ed-tag", false); edRender(); }
 }
 $("ed-before").addEventListener("pointerdown", () => edBefore(true));
@@ -2143,6 +2439,7 @@ $("ed-before").addEventListener("pointerup", () => edBefore(false));
 $("ed-before").addEventListener("pointerleave", (event) => { if (event.buttons) edBefore(false); });
 window.addEventListener("resize", () => { if (shown === "editor") edPlace(); });
 $("vw-edit").addEventListener("click", () => openEditor());
+$("vw-export").addEventListener("click", () => vwExport());
 
 // ----- the export dialog -----
 
@@ -2614,6 +2911,10 @@ function renderSettings() {
   segment("set-look", prefs.look);
   segment("set-dark", prefs.screen_dark_after);
   segment("set-sleep", prefs.sleep_on_battery);
+  segment("set-sleep-ac", prefs.sleep_on_charger);
+  setText("set-sleep-ac-text", prefs.sleep_on_charger
+    ? "With no touch for this long, on the charger. Never while photos are being copied, a computer is copying from the NAS, or photos are being sent to phones."
+    : "Never: on the charger the tablet stays awake, screen dark. For a desk or a dock.");
   setText("set-sleep-text", prefs.sleep_on_battery
     ? "With no touch for this long, and only on battery. Never while photos are being copied. The power button wakes it." +
       (prefs.auto_backup ? " With unattended backup on, Never is better: plugging in the camera may not wake a sleeping tablet." : "")
@@ -2636,6 +2937,11 @@ function renderSettings() {
   toggle("set-multi", prefs.multi_camera);
   renderPhoneSettings();
   segment("set-updates", prefs.update_days);
+  show("set-pmode-row", !!prefs.power_mode);  // only where the system has power modes
+  segment("set-pmode", prefs.power_mode);
+  segment("set-pbutton", prefs.power_button);
+  setText("set-pbutton-text", (prefs.power_button === "off" ? "Turns the tablet off" : "Puts the tablet to sleep") +
+    ", with no question. During a backup, once it is done and both copies are verified.");
   loadFlicker();
   show("set-auto-dark-row", prefs.auto_backup);
   setText("set-auto-text", prefs.auto_backup
@@ -2695,9 +3001,23 @@ function renderSettings() {
     const b = document.createElement("span"); b.textContent = v || "unknown";
     return [a, b];
   });
-  $("set-about").replaceChildren(...pairs([["DoubleTake Field Station", about.version], ["Tablet", about.tablet], ["Name on the network", about.host],
+  $("set-about").replaceChildren(...pairs([["DoubleTake Field Station", about.version],
+    ["Made by", "Nick Mackowski"], ["Code and releases", "github.com/nickmackowski/doubletake"], ["Tablet", about.tablet], ["Processor", about.processor], ["Memory", about.memory], ["Drive", about.drive], ["Copy 2", copy2About()],
+    ["Screen", Math.round(screen.width * (window.devicePixelRatio || 1)) + " \u00d7 " + Math.round(screen.height * (window.devicePixelRatio || 1))],
+    ["Serial number", about.serial], ["Name on the network", about.host], ["User name", about.user],
     ["System", about.system], ["Python", about.python], ["Camera library", about.camera_lib], ["Image library", about.image_lib]]));
   $("set-folders-about").replaceChildren(...pairs([["Program", about.program], ["Photos", about.photos], ["Records", about.records]]));
+}
+
+// About's Copy 2 line: the card or drive as it describes itself, then how DoubleTake set it up.
+function copy2About() {
+  const k = S.card || {};
+  const word = k.kind === "usb" ? "drive" : "card";
+  if (k.state === "off") return "Switched off";
+  if (k.state !== "ready") return "No " + word;
+  const fs = {exfat: "exFAT", vfat: "FAT32", ext4: "ext4", xfs: "XFS", ntfs: "NTFS", ntfs3: "NTFS"}[(k.fstype || "").toLowerCase()] || k.fstype || "";
+  const setup = [fs, k.label ? "\u201c" + k.label + "\u201d" : ""].filter(Boolean).join(" ");
+  return [k.hardware || (k.total ? bytes(k.total) : ""), setup].filter(Boolean).join(", ");
 }
 
 let netList = [];
@@ -2978,10 +3298,24 @@ for (const b of $("set-copy").children) b.addEventListener("click", () => change
 $("set-auto").addEventListener("click", () => {
   const on = !prefs.auto_backup;
   // A sleeping tablet may not wake for the camera, so unattended backup keeps it awake, screen dark.
-  change(on && prefs.sleep_on_battery ? { auto_backup: true, sleep_on_battery: 0 } : { auto_backup: on });
+  change(on && (prefs.sleep_on_battery || prefs.sleep_on_charger)
+    ? { auto_backup: true, sleep_on_battery: 0, sleep_on_charger: 0 } : { auto_backup: on });
 });
 for (const b of $("set-dark").children) b.addEventListener("click", () => change({ screen_dark_after: Number(b.dataset.v) }));
 for (const b of $("set-sleep").children) b.addEventListener("click", () => change({ sleep_on_battery: Number(b.dataset.v) }));
+for (const b of $("set-sleep-ac").children) b.addEventListener("click", () => change({ sleep_on_charger: Number(b.dataset.v) }));
+for (const b of $("set-pmode").children) b.addEventListener("click", () => change({ power_mode: b.dataset.v }));
+for (const b of $("set-pbutton").children) b.addEventListener("click", () => change({ power_button: b.dataset.v }));
+
+// The power button pressed during a backup: it waits, and says so; Cancel, or pressing
+// it again, keeps the tablet on.
+function renderPowerWait() {
+  const action = S.power_pending || "";
+  show("power-wait", !!action);
+  if (action) setText("power-wait-text", "The tablet will " + (action === "off" ? "turn off" : "sleep") +
+    " when the backup finishes and both copies are verified. Press the power button again, or Cancel, to keep it on.");
+}
+$("power-wait-cancel").addEventListener("click", () => post("/api/power/cancel"));
 $("set-auto-dark").addEventListener("click", () => change({ auto_dark: !prefs.auto_dark }));
 $("set-auto-chime").addEventListener("click", () => change({ auto_chime: !prefs.auto_chime }));
 $("set-multi").addEventListener("click", () => change({ multi_camera: !prefs.multi_camera }));
@@ -3011,7 +3345,30 @@ function renderPhoneSettings() {
     return row;
   });
   $("set-link-add").disabled = links.length >= 4;
+  const wm = prefs.watermark_lines || ["", ""];
+  toggle("set-wm", !!prefs.watermark);
+  setText("set-wm-1", wm[0] || "Empty.");
+  setText("set-wm-2", wm[1] || "Empty.");
+  const seen = [prefs.watermark, wm[0], wm[1], prefs.owner_name, prefs.owner_website].join("\n");
+  if ($("set-wm-img").dataset.seen !== seen) {
+    $("set-wm-img").dataset.seen = seen;
+    $("set-wm-img").src = "/api/settings/watermark.jpg?v=" + Date.now();
+  }
+  $("set-wm-img").classList.toggle("off", !prefs.watermark);
 }
+
+function editWatermark(i) {
+  const lines = (prefs.watermark_lines || ["", ""]).slice(0, 2);
+  while (lines.length < 2) lines.push("");
+  openKeyboard({
+    label: i ? "Second line of the watermark, such as your website" : "First line of the watermark, such as \u00a9 Your Name",
+    value: lines[i], max: 60, any: true, hint: "Leave it empty for no line.",
+    done: (text) => { lines[i] = text.trim(); change({ watermark_lines: lines }); },
+  });
+}
+$("set-wm").addEventListener("click", () => change({ watermark: !prefs.watermark }));
+$("set-wm-1-edit").addEventListener("click", () => editWatermark(0));
+$("set-wm-2-edit").addEventListener("click", () => editWatermark(1));
 
 function editLink(i) {
   const links = (prefs.phone_links || []).map((l) => Object.assign({}, l));
@@ -3072,8 +3429,8 @@ async function loadFlicker() {
   show("set-flicker-row", !!flicker.intel);
   if (!flicker.intel) return;
   toggle("set-flicker", !!flicker.set);
-  setText("set-flicker-text", (flicker.set ? "On: two of Intel graphics' power savings are off, which stops the flicker some Intel screens have on Linux. Uses a little more battery."
-    : "Turns off two of Intel graphics' power savings, the usual causes of a flickering screen on Linux. Uses a little more battery.")
+  setText("set-flicker-text", (flicker.set ? "On: two of Intel graphics' power savings are off. Uses a little more battery."
+    : "A flickering screen is most often the desktop's Automatic Screen Brightness, which DoubleTake now turns off. If it still flickers, this turns off two of Intel graphics' power savings. Uses a little more battery.")
     + (flicker.set !== flicker.active ? " Restart the tablet to apply." : ""));
 }
 $("set-flicker").addEventListener("click", async () => {
@@ -3564,11 +3921,25 @@ function openKeyboard(options) {
   show("kbd", true);
 }
 
+// The keys act as the finger lands (pointerdown), so typing is quick. The tap's own click
+// comes after the finger lifts: when Done or Cancel has closed the keyboard by then, that
+// click would land on whatever was under the keyboard (a Change button, a Settings page).
+// So for a moment after the keyboard closes, clicks are let go of.
+let kbClosedAt = 0;
+document.addEventListener("click", (event) => {
+  if (performance.now() - kbClosedAt < 700) {
+    event.preventDefault();
+    event.stopPropagation();
+    kbClosedAt = 0;  // one click only
+  }
+}, true);
+
 function closeKeyboard(save) {
   if (!kb) return;
   const done = kb.done, cancel = kb.cancel;
   const value = kb.any ? kb.value : kb.value.trim();
   kb = null;
+  kbClosedAt = performance.now();
   show("kbd", false);
   if (save && done) done(value);
   else if (!save && cancel) cancel();

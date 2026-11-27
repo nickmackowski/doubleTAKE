@@ -9,6 +9,7 @@ The phone joins the hotspot (the first QR code), then opens a small download pag
   on the phone the next time the page looks (it looks every few seconds)
 - needs a random code in its address, made fresh each time
 - is read-only, and stops by itself after 30 minutes, or when Stop is tapped
+- with the watermark on, gives the phone only marked copies: the exports stay as they are
 
 The screens themselves are never reachable from the phone.
 """
@@ -24,7 +25,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import quote, unquote
 
-from . import photos
+from . import photos, watermark
 
 PORT = 8780
 DOUBLETAKE_LOGO = Path(__file__).resolve().parent / "web" / "phone-doubletake.png"
@@ -78,7 +79,7 @@ PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8">
 <title>__TITLE__</title>
 <style>
 *{box-sizing:border-box}
-html,body{margin:0;background:#16181b;color:#fff}
+html,body{margin:0;background:#333;color:#fff}
 body{font:16px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,system-ui,sans-serif;-webkit-text-size-adjust:100%}
 a{color:inherit}
 header{padding:28px 18px 6px;text-align:center}
@@ -90,10 +91,14 @@ h1{margin:0;font-size:24px;font-weight:650;letter-spacing:.01em}
   font-weight:600;text-decoration:none}
 .how{margin:14px auto 0;max-width:34em;color:rgba(255,255,255,.62);font-size:14px}
 .count{margin-top:6px;color:rgba(255,255,255,.62);font-size:14px}
-.rows{display:flex;flex-wrap:wrap;align-items:flex-start;gap:6px;padding:14px 12px 8px}
-.rows::after{content:"";flex-grow:999999}
-.ph{position:relative;display:block;background:#000;border-radius:4px;overflow:hidden}
+.rows{display:flex;align-items:flex-start;gap:16px;padding:16px 16px 8px}
+.col{flex:1;min-width:0;display:flex;flex-direction:column;gap:16px}
+.ph{position:relative;display:block;width:100%;background:#2a2a2a;overflow:hidden}
 .ph img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;display:block}
+.ph .sv{position:absolute;right:8px;bottom:8px;width:40px;height:40px;border-radius:50%;
+  background:rgba(0,0,0,.5);display:flex;align-items:center;justify-content:center}
+.ph .sv svg{width:22px;height:22px;fill:none;stroke:#fff;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+.rows .empty{flex:1}
 .empty{padding:40px 18px;text-align:center;color:rgba(255,255,255,.62)}
 footer{padding:26px 18px 38px;text-align:center;color:rgba(255,255,255,.42);font-size:13px}
 .mark{position:relative;width:88px;height:88px;margin:0 auto 10px}
@@ -120,7 +125,7 @@ footer{padding:26px 18px 38px;text-align:center;color:rgba(255,255,255,.42);font
 #one .top{display:flex;padding:calc(10px + env(safe-area-inset-top)) 12px 6px;background:#16181b}
 </style></head><body>
 <header>__LOGO__<h1>__TITLE__</h1>__SITE____LINKS__
-<p class="how" id="how">Tap a photo to see it large, then Save.</p>
+<p class="how" id="how">Tap a photo to see it large, or tap its arrow to save it.</p>
 <div class="count" id="count"></div></header>
 <div class="rows" id="rows"></div>
 <footer><div class="mark"><img class="ring" src="ring.png" alt=""><img class="icon" src="doubletake.png" alt=""></div>Sent with DoubleTake</footer>
@@ -139,30 +144,50 @@ if (ios) {
 }
 const key = (p) => p.s + "/" + p.n;
 const path = (kind, p) => kind + "/" + encodeURIComponent(p.s) + "/" + encodeURIComponent(p.n) + "?v=" + p.v;
+// Saving one photo straight from the list: Android and computers download it; on an
+// iPhone or iPad a download goes to Files, so the photo opens large with the hint instead.
+function save(i) {
+  if (ios) { open(i); return; }
+  const p = list[i];
+  const a = document.createElement("a");
+  a.href = path("f", p) + "&dl=1"; a.setAttribute("download", p.n);
+  document.body.append(a); a.click(); a.remove();
+}
+const SAVE_ICON = '<svg viewBox="0 0 24 24"><path d="M12 4v11"/><path d="M7.5 10.5L12 15l4.5-4.5"/><path d="M4 19h16"/></svg>';
+// Two columns, each photo at its own shape, uncropped: the next photo goes under the shorter
+// column, so the order still reads left, right, left from the top.
 function draw() {
   $("count").textContent = list.length + (list.length === 1 ? " photo" : " photos");
   const rows = $("rows");
-  const keep = new Map([...rows.children].map((el) => [el.dataset.k, el]));
-  const items = list.map((p, i) => {
+  const keep = new Map([...rows.querySelectorAll(".ph")].map((el) => [el.dataset.k, el]));
+  const cols = [document.createElement("div"), document.createElement("div")];
+  for (const c of cols) c.className = "col";
+  const tall = [0, 0];
+  list.forEach((p, i) => {
     let a = keep.get(key(p) + "@" + p.v);
     if (!a) {
       a = document.createElement("a");
       a.className = "ph"; a.href = path("f", p); a.dataset.k = key(p) + "@" + p.v;
-      const r = p.w / p.h;
-      a.style.flex = r + " 1 " + Math.round(r * 150) + "px";
       a.style.aspectRatio = p.w + " / " + p.h;
       const img = document.createElement("img");
       img.loading = "lazy"; img.alt = p.n; img.src = path("t", p);
-      a.append(img);
+      const sv = document.createElement("span");
+      sv.className = "sv"; sv.setAttribute("role", "button"); sv.setAttribute("aria-label", "Save");
+      sv.innerHTML = SAVE_ICON;
+      a.append(img, sv);
     }
     a.onclick = (e) => { e.preventDefault(); open(i); };
-    return a;
+    a.querySelector(".sv").onclick = (e) => { e.preventDefault(); e.stopPropagation(); save(i); };
+    const k = tall[0] <= tall[1] ? 0 : 1;
+    cols[k].append(a);
+    tall[k] += p.h / p.w + 0.05;
   });
   if (!list.length) {
     const d = document.createElement("div"); d.className = "empty"; d.textContent = "No photos here yet.";
-    items.push(d);
+    rows.replaceChildren(d);
+    return;
   }
-  rows.replaceChildren(...items);
+  rows.replaceChildren(...cols);
 }
 function open(i) {
   if (i < 0 || i >= list.length) return;
@@ -249,13 +274,15 @@ class PhoneShare:
     tuples; brand() gives {name, website, links}; logo is the logo's file, if there is one."""
 
     def __init__(self, files, host: str, port: int = PORT, minutes: int = MINUTES, on_stop=None,
-                 brand=None, logo: Path | None = None):
+                 brand=None, logo: Path | None = None, mark=None, marked: Path | None = None):
         if not callable(files):
             fixed = list(files)
             files = lambda: fixed  # noqa: E731
         self._files = files
         self._brand = brand or (lambda: {})
         self._logo = Path(logo) if logo else None
+        self._mark = mark or (lambda: [])  # the watermark's lines; none: no watermark
+        self._marked = watermark.Cache(marked) if marked else None
         self.host, self.port = host, port
         self.token = secrets.token_urlsafe(9)
         self.until = time.time() + minutes * 60
@@ -285,6 +312,9 @@ class PhoneShare:
             except OSError:
                 continue
             mark = f"{int(st.st_mtime)}{int(st.st_ctime)}{st.st_size}"
+            lines = self.lines()
+            if lines:  # a changed watermark is a changed photo, so the phone fetches it again
+                mark += watermark.hashlib.sha256("\n".join(lines).encode("utf-8")).hexdigest()[:8]
             known = self._sizes.get(str(path))
             if known is None or known[0] != mark:
                 known = (mark, picture_size(path))
@@ -292,6 +322,31 @@ class PhoneShare:
             w, h = known[1]
             out.append({"s": shoot, "n": name, "w": w, "h": h, "v": mark[-8:]})
         return out
+
+    def lines(self) -> list:
+        try:
+            return watermark.clean_lines(self._mark())
+        except Exception:
+            return []
+
+    def thumb(self, path: Path) -> bytes | None:
+        """The small picture for the list, marked when the watermark is on."""
+        lines = self.lines()
+        if lines:
+            return watermark.marked_jpeg(path, lines, longest=600, quality=80)
+        return photos.small(path, 600)
+
+    def full(self, path: Path) -> bytes | None:
+        """The photo the phone saves: the export itself, or a marked copy of it."""
+        lines = self.lines()
+        if lines:
+            if self._marked is not None:
+                return self._marked.get(path, lines)
+            return watermark.marked_jpeg(path, lines)
+        try:
+            return path.read_bytes()
+        except OSError:
+            return None
 
     def _find(self, shoot: str, name: str):
         for s, n, path in self.files():
@@ -357,12 +412,11 @@ class PhoneShare:
                     if path is None:
                         return self._send(404, b"Not found", "text/plain")
                     if parts[1] == "t":
-                        body = photos.small(path, 600)
+                        body = share.thumb(path)
                         if body is not None:
                             return self._send(200, body, "image/jpeg", cache="private, max-age=600")
-                    try:
-                        body = path.read_bytes()
-                    except OSError:
+                    body = share.full(path)
+                    if body is None:
                         return self._send(404, b"Not found", "text/plain")
                     if parts[1] == "f":
                         share.served.add((parts[2], parts[3]))
@@ -387,6 +441,8 @@ class PhoneShare:
         if self._timer is not None:
             self._timer.cancel()
         server, self._server = self._server, None
+        if self._marked is not None:
+            self._marked.clear()
         if server is not None:
             threading.Thread(target=lambda: (server.shutdown(), server.server_close()), daemon=True).start()
             if self._on_stop is not None:

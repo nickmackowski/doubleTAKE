@@ -252,9 +252,10 @@ def shoot_folder_for(cfg: dict, date: str, name: str, number: int = 1) -> str:
     return f"{date[:4]}_{date[5:7]}{date[8:10]}_{shoot_slug(name)}_{number:02d}"
 
 
-def next_shoot_folder(library, date: str, name: str, ledger=None) -> str:
+def next_shoot_folder(library, date: str, name: str, ledger=None, carry_on: bool = True) -> str:
     """The next free folder for an import with this name on this day: one past the highest
-    number on the tablet or in the records, so a deleted shoot's number is not used again."""
+    number on the tablet or in the records, so a deleted shoot's number is not used again.
+    carry_on: when the last one was stopped part-way, that one (False: always a new one)."""
     stem = shoot_folder_for({}, date, name, 1)[:-2]
     pick = re.compile(re.escape(stem) + r"(\d{2,})")
     used = []
@@ -266,7 +267,7 @@ def next_shoot_folder(library, date: str, name: str, ledger=None) -> str:
         used += [row["folder"] for row in ledger.list_shoots()]
     numbers = [int(m.group(1)) for m in map(pick.fullmatch, used) if m]
     last = stem + f"{max(numbers, default=0):02d}"
-    if numbers and (Path(library) / last / ".incoming" / STOPPED_MARK).exists():
+    if carry_on and numbers and (Path(library) / last / ".incoming" / STOPPED_MARK).exists():
         return last  # stopped part-way: carry on in the same folder
     return stem + f"{max(numbers, default=0) + 1:02d}"
 

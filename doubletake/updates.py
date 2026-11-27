@@ -7,7 +7,13 @@ default, Settings, Device), or a security fix is waiting, a terminal opens with
 offers a restart when one is needed. In the field nothing is ever looked for.
 
   doubletake update           the questions, now
-  doubletake update --auto    run at a maintenance login: open the terminal only when due
+  doubletake update --auto    run at a maintenance login: open the terminal only when due,
+                              or when the screens found updates waiting
+
+While DoubleTake runs it also looks, quietly, so the screens can say an update is ready:
+only on a trusted network (a cable, or a Wi-Fi network trusted for the NAS; never the
+hotspot), only when nothing is being copied, for a newer DoubleTake once a day and for the
+system's updates once a week. Installing still happens only in Maintenance.
 
 The system's updates come from its own software sources (dnf). DoubleTake's come from
 its releases on GitHub: the package for this system, install.sh and the checksums,
@@ -63,6 +69,60 @@ def due(cfg: dict, now: float | None = None) -> bool:
     days = cfg.get("update_days", 30) if cfg.get("update_days") in DAYS else 30
     last = float(_load().get("checked", 0) or 0)
     return (now or time.time()) - last >= days * 86400
+
+
+RELEASE_EVERY = 86400       # a newer DoubleTake: one small question to GitHub, once a day
+SYSTEM_EVERY = 7 * 86400    # the system's updates: dnf fetches its lists (tens of MB), once a week
+
+
+def look(cfg: dict, now: float | None = None, release=None, helper=None) -> dict:
+    """The quiet look while DoubleTake runs (the engine calls it when the time is right).
+    Remembers what it found, for waiting()."""
+    if off(cfg):
+        return waiting()
+    now = now or time.time()
+    data = _load()
+    found = dict(data.get("found") or {})
+    if now - float(data.get("release_at", 0) or 0) >= RELEASE_EVERY:
+        data["release_at"] = now
+        r = (release or latest_release)()
+        if not r.get("error"):
+            found["version"] = r.get("version", "")
+    if now - float(data.get("system_at", 0) or 0) >= SYSTEM_EVERY:
+        data["system_at"] = now
+        s = (helper or nas.helper)("updates", "check", timeout=900)
+        if s.get("ok"):
+            found["system"] = int(s.get("count") or 0)
+            found["security"] = int(s.get("security") or 0)
+    data["found"] = found
+    _save(data)
+    return waiting(data)
+
+
+def waiting(data: dict | None = None) -> dict:
+    """What the screens show: a newer DoubleTake and the system's updates found waiting."""
+    data = _load() if data is None else data
+    found = data.get("found") or {}
+    version = str(found.get("version") or "")
+    newer = version if version and vercmp(version, __version__) > 0 else ""
+    system, security = int(found.get("system") or 0), int(found.get("security") or 0)
+    sig = f"{newer}|{system}|{security}"
+    return {"available": bool(newer or system), "version": newer, "system": system, "security": security,
+            "later": bool(newer or system) and data.get("later") == sig}
+
+
+def later() -> None:
+    """Later: the pop-up stays away until something new is found (the tag in the top bar stays)."""
+    data = _load()
+    w = waiting(data)
+    data["later"] = f"{w['version']}|{w['system']}|{w['security']}"
+    _save(data)
+
+
+def _remember(**found) -> None:
+    data = _load()
+    data["found"] = {**(data.get("found") or {}), **found}
+    _save(data)
 
 
 def mark_checked(now: float | None = None) -> None:
@@ -201,6 +261,9 @@ def auto(cfg: dict) -> int:
     if due(cfg):
         open_terminal(command)
         return 0
+    if waiting()["available"]:  # the screens said an update is ready: that is why we are here
+        open_terminal(command)
+        return 0
     found = nas.helper("updates", "check", timeout=900)
     if found.get("ok") and int(found.get("security") or 0) > 0:
         open_terminal(command + ["--security"])
@@ -257,15 +320,20 @@ def run(cfg: dict, security: bool = False) -> int:
         if _yes("Install them now?", False):
             if _sudo() and subprocess.run(["sudo", "dnf", "upgrade", "-y"]).returncode == 0:
                 _say("Installed.")
+                found = {"ok": True, "count": 0, "security": 0}
                 done = subprocess.run(["sudo", "dnf", "-q", "needs-restarting", "-r"], capture_output=True)
                 restart = done.returncode == 1 or bool(found.get("kernel"))
             else:
                 _say("The updates were not installed.")
+    if found.get("ok"):
+        _remember(system=int(found.get("count") or 0), security=int(found.get("security") or 0))
     print()
 
     # 2. A newer DoubleTake.
     _say("Looking for a newer DoubleTake…")
     release = latest_release()
+    if not release.get("error"):
+        _remember(version=release.get("version", ""))
     if release.get("error"):
         _say("Could not check: " + release["error"].rstrip(".") + ".")
     elif vercmp(release["version"], __version__) <= 0:

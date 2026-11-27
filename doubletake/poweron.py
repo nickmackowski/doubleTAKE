@@ -26,6 +26,8 @@ DESKTOP = [
     # DoubleTake decides when the screen goes dark and when the tablet sleeps on battery
     # (Settings, Display), the same in the kiosk and on the desktop.
     ("org.gnome.settings-daemon.plugins.power", "sleep-inactive-battery-type", "'nothing'"),
+    # 1.1.2c: the desktop's Automatic Screen Brightness made the 7220's screen flicker.
+    ("org.gnome.settings-daemon.plugins.power", "ambient-enabled", "false"),
     ("org.gnome.desktop.notifications", "show-in-lock-screen", "false"),
 ]
 
@@ -61,9 +63,23 @@ def _gsettings(*args) -> tuple:
         return 1, ""
 
 
+# A tablet whose button sends Ctrl+Alt+Del (the Panasonic FZ-M1's A button, night mode in
+# DoubleTake): the desktop's Log Out box must not come up for it.
+CTRL_ALT_DEL_MODELS = {"FZM1-3"}
+CTRL_ALT_DEL = ("org.gnome.settings-daemon.plugins.media-keys", "logout", "@as []")
+
+
+def _product() -> str:
+    try:
+        return Path("/sys/class/dmi/id/product_name").read_text().strip()
+    except OSError:
+        return ""
+
+
 def _keys():
     """The desktop keys this tablet has (an older or trimmed desktop may lack some)."""
-    for schema, key, value in DESKTOP:
+    wanted = list(DESKTOP) + ([CTRL_ALT_DEL] if _product() in CTRL_ALT_DEL_MODELS else [])
+    for schema, key, value in wanted:
         code, _ = _gsettings("range", schema, key)
         if code == 0:
             yield schema, key, value

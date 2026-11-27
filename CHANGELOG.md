@@ -1,5 +1,63 @@
 # Changelog
 
+## 1.1.2c
+- **Three tablets:** the Dell Latitude 7220 and 7212 and the Panasonic FZ-M1, each with its
+  buttons put to work (the [table](docs/USER-GUIDE.md#the-tablets-own-keys); the FZ-M1's A
+  button needs one setting in its Setup Utility first).
+- **An installer.** A DoubleTake installer stick, built on Rocky Linux 9: one text step for
+  Wi-Fi, your user, the time zone and erasing the drive, then the install runs on its own
+  and the tablet starts straight into DoubleTake's welcome pages. The zip install for an
+  existing Red Hat Enterprise Linux 9 or Fedora system carries on as before.
+- **Watermark on what goes to a phone.** Settings › Send to phone: a switch and two lines,
+  your name and website to start with, in thin white letters from corner to corner, with
+  a preview. Only the phone's copies are marked; the exports stay as they are.
+- **No "Open previous tabs?"** The screens always start fresh, with no Firefox bar on top.
+- **An appliance, from the installer:** the boot screen's ring in the top bar and around
+  the icon in the desktop corner, which says "running on Rocky Linux"; only the apps
+  DoubleTake needs, with Kiosk Script out of sight; the clock in 12 hours; Automatic Screen Brightness off; power on
+  Balanced. The tablet is named dt-<its service tag> on a network, the NAS DoubleTake_NAS
+  and the hotspot DoubleTake_HS. A wired network (a dock or USB-C adapter) is used before
+  Wi-Fi; without a network the installer asks the time zone, showing the time in 12 hours.
+- **The power button** sleeps the tablet (or turns it off: Settings › Device) with no
+  question. During a backup it waits until both copies are verified, with a notice and
+  Cancel. **Power mode** (Power Saver, Balanced, Performance) in Settings › Device.
+- **Sleep on the charger too** (after 1 hour, or as set), and Screen dark after 30 min.
+  Maintenance mode goes dark and sleeps as well. Never while photos are being copied, a
+  computer is using the NAS, Send to phone is running, or an update is installing.
+- **Rotate** (↻ in the top bar of the viewer and the editor): 90° a tap, for cameras that do
+  not record which way up they were held (the Insta360). The photo file is never changed.
+- **About** shows Copy 2's card or drive: maker, model, size, and how DoubleTake set it up.
+- **The Panasonic FZ-M1** (7"): its buttons (A for night mode, rotate for brightness,
+  Windows for Home), the boot screen sized for its wide firmware logo, and touch fixes that
+  help every tablet: edit sliders take a finger anywhere on their row, the viewer's bottom
+  buttons take touches near the bezel, the backup banner title stays on one line.
+- **Room for photos** in the bottom bar: one number, what can still be backed up to both
+  copies ("391 GB for both copies"), with each copy's icon turning amber or red when it needs a look. A tap opens the
+  tablet's status.
+- **The viewer:** Previous and Next beside the photo, Export straight from the viewer, and
+  Up/Down to page the strip of thumbnails ("Frames 21 to 30 of 921").
+- **The phone page** in two columns, each photo in its own shape, with a save arrow on each.
+- **The folder box** ("Put these photos in") is three across and only as big as its boxes,
+  with the imports in order (01, 02, ...) and New folder last.
+- **Deleted shoots are forgotten:** gone from the library, and their photos count as new.
+- **doubletake camera-timing:** where the wait before copying goes, with a camera over USB.
+- **The installer** sets the clock from the internet before showing it, and suggests the
+  tablet's service tag as its user name.
+- **The installer's progress screen** has a thin line across the top that fills from orange
+  to green as the install goes.
+- **More room for photos on an ISO install:** the system part is a fixed 25 GB, and the photos
+  get all the rest of the drive (a 128 GB drive went from 43 GB for photos to about 88).
+- **When Copy 2 cannot finish** (its card full or out), the end of a backup says so in amber
+  and says what to do, instead of "carries on by itself".
+- **Updates noticed while DoubleTake runs**, on a trusted network only: an UPDATE AVAILABLE
+  tag beside the title, and once a pop-up, Later or Go to Maintenance.
+- **The 7212's buttons:** the Windows button goes Home;
+  the rotate button steps the brightness 25% at a time, up to full and back down.
+- **The viewer's Previous and Next** in the same style as the strip's Up and Down.
+- **About** names the maker and where the code and releases are, and lists the tablet's
+  processor, memory, drive, screen and serial number.
+- **doubletake speedtest** measures a card reader honestly (different photos for each way).
+
 ## 1.0.5c
 - **Straight home.** « next to the back button jumps to the home screen from a shoot, the
   viewer, the editor or Exports, rather than four taps of ‹.

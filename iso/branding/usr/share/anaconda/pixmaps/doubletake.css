@@ -1,0 +1,25 @@
+/* The DoubleTake installer's look: the boot screen's charcoal, with its logo in the sidebar. */
+
+.logo-sidebar {
+    background-image: none;
+    background-color: #16181b;
+}
+
+.logo {
+    background-image: url('/usr/share/anaconda/pixmaps/doubletake-sidebar.png');
+    background-position: 50% 40px;
+    background-size: 72% auto;
+    background-repeat: no-repeat;
+    background-color: transparent;
+}
+
+.product-logo {
+    background-image: none;
+    background-color: transparent;
+}
+
+AnacondaSpokeWindow #nav-box {
+    background-image: none;
+    background-color: #16181b;
+    color: white;
+}

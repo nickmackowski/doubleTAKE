@@ -15,8 +15,14 @@ from pathlib import Path
 
 from . import editor, config, photos
 
+from . import __version__
+
 DAY = 86400
 HOLD = DAY  # a shoot can be deleted only this long after its last photo was copied
+# Test builds (1.1.2c~test11) let a shoot go at once, so photos can be imported again and
+# again while testing. A release (no ~test) always keeps the day: nothing to remember.
+if "~test" in __version__:
+    HOLD = 0
 
 
 def last_copied(ledger, shoot_id: int) -> float:
@@ -84,6 +90,7 @@ def clear_shoot(ledger, cfg: dict, shoot_id: int, card=None, now: float | None =
     _prune(folder, library)
     ledger.set_cleared(shoot_id, time.time())
     on_card = clear_on_card(ledger, card, shoot) if card is not None else 0
+    ledger.forget_shoot(shoot_id)  # nothing is kept about a deleted shoot
     return {"removed": removed, "freed": freed, "card_removed": on_card}
 
 
@@ -107,4 +114,5 @@ def card_cleanup(ledger, card) -> int:
     total = 0
     for shoot in ledger.cleared_with_copies(card.card_id):
         total += clear_on_card(ledger, card, shoot)
+        ledger.forget_shoot(shoot["id"])
     return total
